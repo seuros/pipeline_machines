@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 description = "Bounded stage dispatch, fanout/join, cancellation, and draining decisions"
 readme = "README.md"
+exclude = ["src/**/tests.rs", "tests/"]
 [dependencies]
 priority-machines.workspace = true
 flow-machines.workspace = true

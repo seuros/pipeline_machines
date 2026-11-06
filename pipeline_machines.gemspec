@@ -19,6 +19,7 @@ Gem::Specification.new do |spec|
     lib/**/*.rb sig/**/*.rbs ext/**/*.{rs,rb,toml,md} Cargo.toml
     Cargo.lock README.md CHANGELOG.md LICENSE.txt
   ]).select { |p| File.file?(p) }
+    .reject { |p| p.end_with?('/tests.rs') || p.include?('/tests/') }
   spec.require_paths = ['lib']
   spec.extensions = ['ext/pipeline_machines_native/extconf.rb']
   spec.add_dependency 'rb_sys', '~> 0.9', '>= 0.9.130'
