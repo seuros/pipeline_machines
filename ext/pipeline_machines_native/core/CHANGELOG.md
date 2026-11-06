@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2](https://github.com/seuros/pipeline_machines/compare/pipeline-machines-v0.2.1...pipeline-machines-v0.2.2) (2026-11-06)
+
+
+### Bug Fixes
+
+* crates.io keywords and categories for the core ([f308575](https://github.com/seuros/pipeline_machines/commit/f30857529c4ac61c145128710bb916770699f760))
+
 ## [0.2.1](https://github.com/seuros/pipeline_machines/compare/pipeline-machines-v0.2.0...pipeline-machines-v0.2.1) (2026-11-06)
 
 
