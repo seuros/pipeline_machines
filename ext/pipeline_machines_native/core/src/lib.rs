@@ -133,14 +133,7 @@ impl<T: Copy, const N: usize, const C: usize> Stage<T, N, C> {
     /// # Panics
     /// Panics only if internal ready-lane invariants are inconsistent.
     pub fn dispatch(&mut self, eligible: &[bool; N]) -> Option<Dispatch<T>> {
-        let ready = core::array::from_fn(|lane| {
-            eligible[lane]
-                && self
-                    .jobs
-                    .iter()
-                    .flatten()
-                    .any(|job| job.lane == lane && job.state == State::Queued)
-        });
+        let ready = core::array::from_fn(|lane| eligible[lane] && self.has_queued(lane));
         let lane = self.scheduler.select(&ready)?;
         let slot = self
             .jobs
@@ -251,13 +244,15 @@ impl<T: Copy, const N: usize, const C: usize> Stage<T, N, C> {
             .as_mut()
             .filter(|job| job.generation == id.generation)
     }
-    fn reset_drained_lane(&mut self, lane: usize) {
-        if !self
-            .jobs
+    /// Whether `lane` still holds a job waiting for dispatch.
+    fn has_queued(&self, lane: usize) -> bool {
+        self.jobs
             .iter()
             .flatten()
             .any(|job| job.lane == lane && job.state == State::Queued)
-        {
+    }
+    fn reset_drained_lane(&mut self, lane: usize) {
+        if !self.has_queued(lane) {
             assert!(self.scheduler.deactivate(lane));
         }
     }
