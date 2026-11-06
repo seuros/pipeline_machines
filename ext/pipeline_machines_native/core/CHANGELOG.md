@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.3](https://github.com/seuros/pipeline_machines/compare/pipeline-machines-v0.2.2...pipeline-machines-v0.2.3) (2026-11-06)
+
+
+### Bug Fixes
+
+* extract has_queued lane check ([8c9510f](https://github.com/seuros/pipeline_machines/commit/8c9510fbd5987c2d2f9d4c653ad7aff983e30955))
+
 ## [0.2.2](https://github.com/seuros/pipeline_machines/compare/pipeline-machines-v0.2.1...pipeline-machines-v0.2.2) (2026-11-06)
 
 
