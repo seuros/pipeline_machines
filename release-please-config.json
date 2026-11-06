@@ -1,0 +1,16 @@
+{
+  "plugins": ["cargo-workspace"],
+  "packages": {
+    ".": {
+      "release-type": "ruby",
+      "package-name": "pipeline_machines",
+      "bump-minor-pre-major": true,
+      "bump-patch-for-minor-pre-major": true
+    },
+    "ext/pipeline_machines_native/core": {
+      "release-type": "rust",
+      "package-name": "pipeline-machines",
+      "bump-minor-pre-major": true
+    }
+  }
+}

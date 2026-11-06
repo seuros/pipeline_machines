@@ -1,0 +1,20 @@
+module PipelineMachines
+  VERSION: String
+  class Job
+  end
+  class Stage
+    def self.new: (Array[Integer] weights) -> Stage
+    def capacity: () -> Integer
+    def lanes: () -> Integer
+    def submit: (Integer lane, Integer payload) -> Job?
+    def fan_out: (Array[Integer] lanes, Integer payload) -> Array[Job]?
+    def dispatch: () -> [Job, Integer, Integer]?
+    def cancel: (Job) -> bool
+    def complete: (Job) -> bool
+    def confirm_cancel: (Job) -> bool
+    def reap: (Job) -> [Integer, Symbol]?
+    def join: (Array[Job]) -> Symbol
+    def begin_drain: () -> nil
+    def drained?: () -> bool
+  end
+end
