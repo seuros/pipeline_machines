@@ -1,20 +1,91 @@
 module PipelineMachines
   VERSION: String
-  class Job
+
+  # Refusals: the call was not honoured and changed nothing. Every reason has
+  # its own symbol; there is no catch-all. :undersized is the core's refusal
+  # of an output buffer too short for a fan-out; `fan_out` sizes that buffer
+  # itself, so it never answers it here.
+  type refusal = :draining | :unknown_lane | :repeated_lane | :undersized | :full | :exhausted
+               | :stale | :not_running | :not_cancelling | :not_terminal | :concluded
+
+  # The core's `State`.
+  type state = :queued | :running | :cancelling | :complete | :cancelled
+
+  # The scope (0..65_535) a job id was issued under: the top 16 bits. Use it
+  # to route an id to the stage that issued it.
+  def self.scope_of: (Integer id) -> Integer
+
+  # Job ids are Integers, as issued by `submit` and `fan_out`.
+  class Dispatch < Data
+    attr_reader id: Integer
+    attr_reader payload: Integer
+    attr_reader lane: Integer
+    def self.new: (Integer id, Integer payload, Integer lane) -> Dispatch
+                | (id: Integer, payload: Integer, lane: Integer) -> Dispatch
   end
+
+  class Reaped < Data
+    type terminal = :complete | :cancelled
+
+    attr_reader payload: Integer
+    attr_reader terminal: terminal
+    def self.new: (Integer payload, terminal terminal) -> Reaped
+                | (payload: Integer, terminal: terminal) -> Reaped
+  end
+
   class Stage
+    LANES: Integer
+    CAPACITY: Integer
+
+    # `weights` is an Array of exactly LANES Integers in 1..2**32-1: TypeError
+    # for anything else, RangeError for a weight outside the range. Scope zero.
     def self.new: (Array[Integer] weights) -> Stage
+    # `scope` is an Integer in 0..65_535, carried in the top 16 bits of every id.
+    def self.with_scope: (Array[Integer] weights, Integer scope) -> Stage
+    # Nothing held, the id sequence continuing after `issued` (a saved
+    # `#issued`): the constructor for a restart. RangeError when `issued` is
+    # above 2**48 - 1.
+    def self.resumed: (Array[Integer] weights, Integer scope, Integer issued) -> Stage
+    def scope: () -> Integer
+    # Ids issued so far: the count to save for `resumed`.
+    def issued: () -> Integer
     def capacity: () -> Integer
     def lanes: () -> Integer
-    def submit: (Integer lane, Integer payload) -> Job?
-    def fan_out: (Array[Integer] lanes, Integer payload) -> Array[Job]?
-    def dispatch: () -> [Job, Integer, Integer]?
-    def cancel: (Job) -> bool
-    def complete: (Job) -> bool
-    def confirm_cancel: (Job) -> bool
-    def reap: (Job) -> [Integer, Symbol]?
-    def join: (Array[Job]) -> Symbol
-    def begin_drain: () -> nil
+    # Jobs held: admitted and not yet reaped.
+    def size: () -> Integer
+    def empty?: () -> bool
+    def draining?: () -> bool
     def drained?: () -> bool
+    # nil for an id that names no held job. Never refuses.
+    def state: (Integer id) -> state?
+
+    # Honoured: the job id. Refused: :draining, :unknown_lane, :full, :exhausted.
+    def submit: (Integer lane, Integer payload) -> (Integer | :draining | :unknown_lane | :full | :exhausted)
+    # All lanes or none. Honoured: the job ids, in the order of `lanes`.
+    # Refused: :draining, :unknown_lane, :repeated_lane, :full, :exhausted.
+    def fan_out: (Array[Integer] lanes, Integer payload)
+               -> (Array[Integer] | :draining | :unknown_lane | :repeated_lane | :full | :exhausted)
+    # `eligible` is an Array of exactly LANES true/false values. A Dispatch,
+    # or nil when no eligible lane has a queued job. Never refuses.
+    def dispatch: (Array[bool] eligible) -> Dispatch?
+    # Honoured: :cancelled (was queued), :cancelling (is running), or the
+    # repeats :already_cancelling and :already_cancelled. Refused: :stale,
+    # :concluded.
+    def cancel: (Integer id)
+              -> (:cancelled | :cancelling | :already_cancelling | :already_cancelled | :stale | :concluded)
+    # Honoured: :completed, or the repeat :already_complete. Refused: :stale,
+    # :not_running, :concluded.
+    def complete: (Integer id) -> (:completed | :already_complete | :stale | :not_running | :concluded)
+    # Honoured: :confirmed, or the repeat :already_cancelled. Refused: :stale,
+    # :not_cancelling, :concluded.
+    def confirm_cancel: (Integer id)
+                      -> (:confirmed | :already_cancelled | :stale | :not_cancelling | :concluded)
+    # Honoured: a Reaped. Refused: :not_terminal, and :stale (a repeat included).
+    def reap: (Integer id) -> (Reaped | :stale | :not_terminal)
+    # Honoured: :ready, :pending or :cancelled. Refused: :stale when any id
+    # names no held job.
+    def join: (Array[Integer] ids) -> (:ready | :pending | :cancelled | :stale)
+    # Never refuses. :already_draining is a repeat that changes nothing.
+    def begin_drain: () -> (:begun | :already_draining)
   end
 end

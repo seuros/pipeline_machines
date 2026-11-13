@@ -12,5 +12,6 @@ categories = ["no-std", "algorithms", "concurrency"]
 [dependencies]
 priority-machines.workspace = true
 flow-machines.workspace = true
+periscope-machines.workspace = true
 [lints]
 workspace = true

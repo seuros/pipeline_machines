@@ -1,203 +1,282 @@
 //! Native boundary: all lifecycle decisions are delegated to the stage core.
 mod init;
+mod names;
+
+use std::{cell::RefCell, num::NonZeroU32};
 
 use magnus::{
-    Error, Integer, RArray, Ruby, Symbol, TryConvert, Value, prelude::*, typed_data::Obj,
+    Error, Integer, RArray, Ruby, TryConvert, Value,
+    prelude::*,
+    typed_data::Obj,
+    value::{Qfalse, Qtrue},
 };
-use pipeline_machines::{JobId, Join, Stage, State};
-use std::{cell::RefCell, num::NonZeroU32, sync::Arc};
+use pipeline_machines::{JobId, Refusal};
 
 const LANES: usize = 4;
 const CAPACITY: usize = 64;
 
+type Core = pipeline_machines::Stage<u64, LANES, CAPACITY>;
+
 #[derive(Clone, Copy)]
 struct Number(u64);
+
+impl Number {
+    /// A lane index. One beyond the address space names no lane, like any
+    /// other index past the stage's last: the core refuses it.
+    fn lane(self) -> usize {
+        usize::try_from(self.0).unwrap_or(usize::MAX)
+    }
+
+    const fn id(self) -> JobId {
+        JobId::from_raw(self.0)
+    }
+}
 
 impl TryConvert for Number {
     fn try_convert(value: Value) -> Result<Self, Error> {
         if Integer::from_value(value).is_none() {
             return Err(Error::new(
                 Ruby::get_with(value).exception_type_error(),
-                "expected an unsigned Integer",
+                "expected an Integer (unsigned 64-bit)",
             ));
         }
         u64::try_convert(value).map(Self)
     }
 }
 
-#[magnus::wrap(class = "PipelineMachines::Job", free_immediately, size)]
-struct Handle {
-    owner: Arc<()>,
-    id: JobId,
+/// An issuer scope: an Integer in `0..=65535`.
+#[derive(Clone, Copy)]
+struct Scope(u16);
+
+impl TryConvert for Scope {
+    fn try_convert(value: Value) -> Result<Self, Error> {
+        if Integer::from_value(value).is_none() {
+            return Err(Error::new(
+                Ruby::get_with(value).exception_type_error(),
+                "expected an Integer scope (0..=65535)",
+            ));
+        }
+        u16::try_convert(value).map(Self)
+    }
+}
+
+/// Lane weights: an Array of exactly `LANES` Integers in `1..=u32::MAX`.
+fn weights(ruby: &Ruby, weights: RArray) -> Result<[NonZeroU32; LANES], Error> {
+    let values = weights.to_value_array::<LANES>()?;
+    let mut converted = [NonZeroU32::MIN; LANES];
+    for (slot, value) in converted.iter_mut().zip(values) {
+        let number = Number::try_convert(value)?.0;
+        *slot = u32::try_from(number)
+            .ok()
+            .and_then(NonZeroU32::new)
+            .ok_or_else(|| {
+                Error::new(
+                    ruby.exception_range_error(),
+                    "weights must be in 1..2**32-1",
+                )
+            })?;
+    }
+    Ok(converted)
+}
+
+/// Lane eligibility: an Array of exactly `LANES` values, each `true` or `false`.
+fn eligibility(ruby: &Ruby, eligible: RArray) -> Result<[bool; LANES], Error> {
+    let values = eligible.to_value_array::<LANES>()?;
+    let mut converted = [false; LANES];
+    for (slot, value) in converted.iter_mut().zip(values) {
+        *slot = if Qtrue::from_value(value).is_some() {
+            true
+        } else if Qfalse::from_value(value).is_some() {
+            false
+        } else {
+            return Err(Error::new(
+                ruby.exception_type_error(),
+                "eligible must hold true or false for every lane",
+            ));
+        };
+    }
+    Ok(converted)
+}
+
+/// An Array of Integers, converted before the core is touched.
+fn numbers(array: RArray) -> Result<Vec<Number>, Error> {
+    (0..array.len())
+        .map(|index| Number::try_convert(array.entry(index.cast_signed())?))
+        .collect()
+}
+
+fn refused(ruby: &Ruby, refusal: Refusal) -> Value {
+    ruby.to_symbol(names::refusal(refusal)).as_value()
+}
+
+/// An honoured unit outcome or a refusal, as the symbol it maps to.
+fn answer<T>(ruby: &Ruby, outcome: Result<T, Refusal>, name: fn(T) -> &'static str) -> Value {
+    ruby.to_symbol(outcome.map_or_else(names::refusal, name))
+        .as_value()
+}
+
+fn data(ruby: &Ruby, name: &str) -> Result<Value, Error> {
+    ruby.define_module("PipelineMachines")?.const_get(name)
+}
+
+/// `PipelineMachines.scope_of(id)`: the scope an id was issued under.
+const fn scope_of_id(id: Number) -> u16 {
+    id.id().scope()
 }
 
 #[magnus::wrap(class = "PipelineMachines::Stage", free_immediately, size)]
-struct Wrapper {
-    owner: Arc<()>,
-    core: RefCell<Stage<u64, LANES, CAPACITY>>,
+struct Stage {
+    core: RefCell<Core>,
 }
 
-impl Wrapper {
-    fn new(ruby: &Ruby, weights: RArray) -> Result<Self, Error> {
-        let values = weights.to_value_array::<LANES>()?;
-        let mut converted = [NonZeroU32::MIN; LANES];
-        for (slot, value) in converted.iter_mut().zip(values) {
-            let number = Number::try_convert(value)?.0;
-            *slot = u32::try_from(number)
-                .ok()
-                .and_then(NonZeroU32::new)
-                .ok_or_else(|| {
-                    Error::new(ruby.exception_arg_error(), "weights must be in 1..2**32-1")
-                })?;
-        }
-        let core = Stage::new(converted)
-            .ok_or_else(|| Error::new(ruby.exception_arg_error(), "invalid stage bounds"))?;
-        Ok(Self {
-            owner: Arc::new(()),
+impl Stage {
+    fn build(ruby: &Ruby, core: Option<Core>, why: &'static str) -> Result<Self, Error> {
+        core.map(|core| Self {
             core: RefCell::new(core),
         })
+        .ok_or_else(|| Error::new(ruby.exception_range_error(), why))
     }
 
-    fn handle(&self, id: JobId) -> Handle {
-        Handle {
-            owner: Arc::clone(&self.owner),
-            id,
-        }
+    fn new(ruby: &Ruby, lanes: RArray) -> Result<Self, Error> {
+        let core = Core::new(weights(ruby, lanes)?);
+        Self::build(ruby, core, "invalid stage bounds")
     }
 
-    fn submit(this: Obj<Self>, lane: Number, payload: Number) -> Result<Option<Handle>, Error> {
-        this.check_frozen()?;
-        let lane = usize::try_from(lane.0).map_err(|_| {
-            Error::new(
-                Ruby::get_with(this).exception_range_error(),
-                "lane out of range",
-            )
-        })?;
-        let id = this.core.borrow_mut().submit(lane, payload.0);
-        Ok(id.map(|id| this.handle(id)))
+    fn with_scope(ruby: &Ruby, lanes: RArray, scope: Scope) -> Result<Self, Error> {
+        let core = Core::with_scope(weights(ruby, lanes)?, scope.0);
+        Self::build(ruby, core, "invalid stage bounds")
     }
 
-    fn fan_out(
-        ruby: &Ruby,
-        this: Obj<Self>,
-        lanes: RArray,
-        payload: Number,
-    ) -> Result<Option<RArray>, Error> {
-        this.check_frozen()?;
-        if lanes.len() > LANES {
-            return Err(Error::new(
-                ruby.exception_arg_error(),
-                "at most four distinct lanes",
-            ));
-        }
-        let mut converted = Vec::with_capacity(lanes.len());
-        for index in 0..lanes.len() {
-            let number = Number::try_convert(lanes.entry(index.cast_signed())?)?.0;
-            converted.push(
-                usize::try_from(number)
-                    .map_err(|_| Error::new(ruby.exception_range_error(), "lane out of range"))?,
-            );
-        }
-        let ids = this.core.borrow_mut().fan_out(&converted, payload.0);
-        let Some(ids) = ids else {
-            return Ok(None);
-        };
-        let result = ruby.ary_new();
-        for id in ids.into_iter().flatten() {
-            result.push(this.handle(id))?;
-        }
-        Ok(Some(result))
+    fn resumed(ruby: &Ruby, lanes: RArray, scope: Scope, issued: Number) -> Result<Self, Error> {
+        let core = Core::resumed(weights(ruby, lanes)?, scope.0, issued.0);
+        Self::build(
+            ruby,
+            core,
+            "issued is past the last sequence of a scope (2**48 - 1)",
+        )
     }
 
-    fn dispatch(ruby: &Ruby, this: Obj<Self>) -> Result<Option<RArray>, Error> {
-        this.check_frozen()?;
-        let work = this.core.borrow_mut().dispatch(&[true; LANES]);
-        let Some(work) = work else {
-            return Ok(None);
-        };
-        let result = ruby.ary_new();
-        result.push(this.handle(work.id))?;
-        result.push(work.payload)?;
-        result.push(work.lane)?;
-        Ok(Some(result))
+    fn scope(&self) -> u16 {
+        self.core.borrow().scope()
     }
 
-    fn cancel(this: Obj<Self>, handle: Obj<Handle>) -> Result<bool, Error> {
-        this.check_frozen()?;
-        Ok(Arc::ptr_eq(&this.owner, &handle.owner) && this.core.borrow_mut().cancel(handle.id))
+    fn issued(&self) -> u64 {
+        self.core.borrow().issued()
     }
 
-    fn complete(this: Obj<Self>, handle: Obj<Handle>) -> Result<bool, Error> {
-        this.check_frozen()?;
-        Ok(Arc::ptr_eq(&this.owner, &handle.owner) && this.core.borrow_mut().complete(handle.id))
+    fn capacity(&self) -> usize {
+        self.core.borrow().capacity()
     }
 
-    fn confirm_cancel(this: Obj<Self>, handle: Obj<Handle>) -> Result<bool, Error> {
-        this.check_frozen()?;
-        Ok(Arc::ptr_eq(&this.owner, &handle.owner)
-            && this.core.borrow_mut().confirm_cancel(handle.id))
+    fn lanes(&self) -> usize {
+        self.core.borrow().lanes()
     }
 
-    fn reap(
-        ruby: &Ruby,
-        this: Obj<Self>,
-        handle: Obj<Handle>,
-    ) -> Result<Option<(u64, Symbol)>, Error> {
-        this.check_frozen()?;
-        if !Arc::ptr_eq(&this.owner, &handle.owner) {
-            return Ok(None);
-        }
-        let result = this.core.borrow_mut().reap(handle.id);
-        Ok(result.map(|(payload, state)| (payload, ruby.to_symbol(state_name(state)))))
+    fn size(&self) -> usize {
+        self.core.borrow().len()
     }
 
-    fn join(ruby: &Ruby, this: Obj<Self>, handles: RArray) -> Result<Symbol, Error> {
-        if handles.len() > CAPACITY {
-            return Err(Error::new(
-                ruby.exception_arg_error(),
-                "at most 64 join handles",
-            ));
-        }
-        let mut ids = Vec::with_capacity(handles.len());
-        for index in 0..handles.len() {
-            let handle: Obj<Handle> = handles.entry(index.cast_signed())?;
-            if !Arc::ptr_eq(&this.owner, &handle.owner) {
-                return Ok(ruby.to_symbol("unknown"));
-            }
-            ids.push(handle.id);
-        }
-        let result = this.core.borrow().join(&ids);
-        Ok(ruby.to_symbol(match result {
-            Join::Ready => "ready",
-            Join::Pending => "pending",
-            Join::Cancelled => "cancelled",
-            _ => "unknown",
-        }))
+    fn is_empty(&self) -> bool {
+        self.core.borrow().is_empty()
     }
 
-    fn begin_drain(this: Obj<Self>) -> Result<(), Error> {
-        this.check_frozen()?;
-        this.core.borrow_mut().begin_drain();
-        Ok(())
+    fn is_draining(&self) -> bool {
+        self.core.borrow().is_draining()
     }
 
     fn is_drained(&self) -> bool {
         self.core.borrow().is_drained()
     }
-    const fn capacity() -> usize {
-        CAPACITY
-    }
-    const fn lanes() -> usize {
-        LANES
-    }
-}
 
-const fn state_name(state: State) -> &'static str {
-    match state {
-        State::Queued => "queued",
-        State::Running => "running",
-        State::Cancelling => "cancelling",
-        State::Complete => "complete",
-        _ => "cancelled",
+    fn state(ruby: &Ruby, this: Obj<Self>, id: Number) -> Option<Value> {
+        let state = this.core.borrow().state(id.id());
+        state.map(|state| ruby.to_symbol(names::state(state)).as_value())
+    }
+
+    fn submit(ruby: &Ruby, this: Obj<Self>, lane: Number, payload: Number) -> Result<Value, Error> {
+        this.check_frozen()?;
+        let outcome = this.core.borrow_mut().submit(lane.lane(), payload.0);
+        Ok(match outcome {
+            Ok(id) => ruby.integer_from_u64(id.raw()).as_value(),
+            Err(refusal) => refused(ruby, refusal),
+        })
+    }
+
+    /// The core writes ids to a caller's buffer and reports how many; here
+    /// the buffer is sized to the lanes asked for and returned as an Array.
+    fn fan_out(
+        ruby: &Ruby,
+        this: Obj<Self>,
+        lanes: RArray,
+        payload: Number,
+    ) -> Result<Value, Error> {
+        this.check_frozen()?;
+        let lanes: Vec<usize> = numbers(lanes)?.into_iter().map(Number::lane).collect();
+        let mut out = vec![JobId::default(); lanes.len()];
+        let outcome = this.core.borrow_mut().fan_out(&lanes, payload.0, &mut out);
+        Ok(match outcome {
+            Ok(written) => {
+                let ids = ruby.ary_new_capa(written);
+                for id in out.iter().take(written) {
+                    ids.push(id.raw())?;
+                }
+                ids.as_value()
+            }
+            Err(refusal) => refused(ruby, refusal),
+        })
+    }
+
+    fn dispatch(ruby: &Ruby, this: Obj<Self>, eligible: RArray) -> Result<Option<Value>, Error> {
+        this.check_frozen()?;
+        let eligible = eligibility(ruby, eligible)?;
+        // Resolve the class before taking anything, so a failure loses nothing.
+        let class = data(ruby, "Dispatch")?;
+        let work = this.core.borrow_mut().dispatch(&eligible);
+        work.map(|work| class.funcall("new", (work.id.raw(), work.payload, work.lane)))
+            .transpose()
+    }
+
+    fn cancel(ruby: &Ruby, this: Obj<Self>, id: Number) -> Result<Value, Error> {
+        this.check_frozen()?;
+        let outcome = this.core.borrow_mut().cancel(id.id());
+        Ok(answer(ruby, outcome, names::cancellation))
+    }
+
+    fn complete(ruby: &Ruby, this: Obj<Self>, id: Number) -> Result<Value, Error> {
+        this.check_frozen()?;
+        let outcome = this.core.borrow_mut().complete(id.id());
+        Ok(answer(ruby, outcome, names::completion))
+    }
+
+    fn confirm_cancel(ruby: &Ruby, this: Obj<Self>, id: Number) -> Result<Value, Error> {
+        this.check_frozen()?;
+        let outcome = this.core.borrow_mut().confirm_cancel(id.id());
+        Ok(answer(ruby, outcome, names::confirmation))
+    }
+
+    fn reap(ruby: &Ruby, this: Obj<Self>, id: Number) -> Result<Value, Error> {
+        this.check_frozen()?;
+        // Resolve the class before taking anything, so a failure loses nothing.
+        let class = data(ruby, "Reaped")?;
+        let outcome = this.core.borrow_mut().reap(id.id());
+        match outcome {
+            Ok(reaped) => {
+                let terminal = ruby.to_symbol(names::terminal(reaped.terminal));
+                class.funcall("new", (reaped.payload, terminal))
+            }
+            Err(refusal) => Ok(refused(ruby, refusal)),
+        }
+    }
+
+    fn join(ruby: &Ruby, this: Obj<Self>, ids: RArray) -> Result<Value, Error> {
+        let ids: Vec<JobId> = numbers(ids)?.into_iter().map(Number::id).collect();
+        let outcome = this.core.borrow().join(&ids);
+        Ok(answer(ruby, outcome, names::join))
+    }
+
+    fn begin_drain(ruby: &Ruby, this: Obj<Self>) -> Result<Value, Error> {
+        this.check_frozen()?;
+        let outcome = this.core.borrow_mut().begin_drain();
+        Ok(ruby.to_symbol(names::drain_begin(outcome)).as_value())
     }
 }
