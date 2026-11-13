@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.0](https://github.com/seuros/pipeline_machines/compare/pipeline_machines/v0.1.4...pipeline_machines/v0.2.0) (2026-11-13)
+
+
+### ⚠ BREAKING CHANGES
+
+* converted to the fleet conventions. One exhaustive Refusal per crate, Result from every operation that can refuse, a refusal changes nothing, provable idempotent repeats are honoured, Ruby mirrors the core. No compatibility aliases. Requires flow-machines >= 0.3 and priority-machines >= 0.4. JobId is a scoped u64 issued through periscope-machines; Ruby job ids are Integers.
+
+### Features
+
+* one Refusal, scoped job ids, atomic fan_out into a buffer, and lane eligibility in Ruby ([6ae6fd4](https://github.com/seuros/pipeline_machines/commit/6ae6fd428bea3f67463ce3bb49862fa7c59259c2))
+
 ## [0.1.4](https://github.com/seuros/pipeline_machines/compare/pipeline_machines/v0.1.3...pipeline_machines/v0.1.4) (2026-11-06)
 
 
