@@ -1,5 +1,5 @@
 {
-  ".": "0.1.4",
-  "ext/pipeline_machines_native/core": "0.2.3",
-  "ext/pipeline_machines_native/ffi": "0.1.4"
+  ".": "0.2.0",
+  "ext/pipeline_machines_native/core": "0.3.0",
+  "ext/pipeline_machines_native/ffi": "0.1.5"
 }
