@@ -8,7 +8,7 @@ use std::{cell::RefCell, num::NonZeroU32};
 use classes::classes;
 use magnus::{Error, Ruby, Symbol, Value, prelude::*, typed_data::Obj};
 use matryona_machines::ruby::{
-    Symbols, boolean, exact_array, exact_array_n, integer, keep, positive, symbol,
+    Symbols, boolean, exact_array_n, exact_array_with, integer, keep, positive, symbol,
 };
 use names::{
     Cancellations, Completions, Confirmations, DrainBegins, Joins, Refusals, States, Terminals,
@@ -65,7 +65,7 @@ fn numbers<T>(
     name: &str,
     read: fn(Value, &str) -> Result<T, Error>,
 ) -> Result<Vec<T>, Error> {
-    let array = exact_array(ruby, array, format!("{name} must be an Array"))?;
+    let array = exact_array_with(ruby, array, || format!("{name} must be an Array"))?;
     (0..array.len())
         .map(|index| read(array.entry(index.cast_signed())?, name))
         .collect()
