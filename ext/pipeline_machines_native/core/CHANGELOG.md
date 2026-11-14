@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.5.0](https://github.com/seuros/pipeline_machines/compare/pipeline-machines-v0.4.0...pipeline-machines-v0.5.0) (2026-11-14)
+
+
+### ⚠ BREAKING CHANGES
+
+* adopt matryona-machines 0.2 (exact arrays, symbols!, frozen-first)
+
+### Features
+
+* adopt matryona-machines 0.2 (exact arrays, symbols!, frozen-first) ([03b71fd](https://github.com/seuros/pipeline_machines/commit/03b71fd395634745db31f90a308f81c7751c4019))
+
 ## [0.4.0](https://github.com/seuros/pipeline_machines/compare/pipeline-machines-v0.3.0...pipeline-machines-v0.4.0) (2026-11-14)
 
 
