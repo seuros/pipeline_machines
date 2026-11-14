@@ -6,9 +6,9 @@ use super::*;
 fn a_queued_job() {
     let mut stage = stage::<1, 2>();
     let id = stage.submit(0, 1).expect("job");
-    refused(&mut stage, Refusal::NotRunning, |s| s.complete(id));
-    refused(&mut stage, Refusal::NotCancelling, |s| s.confirm_cancel(id));
-    refused(&mut stage, Refusal::NotTerminal, |s| s.reap(id));
+    refuses(&mut stage, Refusal::NotRunning, |s| s.complete(id));
+    refuses(&mut stage, Refusal::NotCancelling, |s| s.confirm_cancel(id));
+    refuses(&mut stage, Refusal::NotTerminal, |s| s.reap(id));
     assert_eq!(stage.cancel(id), Ok(Cancellation::Cancelled));
     assert_eq!(stage.state(id), Some(State::Cancelled));
     assert_eq!(
@@ -24,8 +24,8 @@ fn a_running_job() {
     let id = stage.submit(0, 1).expect("job");
     assert_eq!(dispatched(&mut stage).id(), id);
     assert_eq!(stage.state(id), Some(State::Running));
-    refused(&mut stage, Refusal::NotCancelling, |s| s.confirm_cancel(id));
-    refused(&mut stage, Refusal::NotTerminal, |s| s.reap(id));
+    refuses(&mut stage, Refusal::NotCancelling, |s| s.confirm_cancel(id));
+    refuses(&mut stage, Refusal::NotTerminal, |s| s.reap(id));
     assert_eq!(stage.complete(id), Ok(Completion::Completed));
 }
 
@@ -39,17 +39,18 @@ fn a_cancelling_job_keeps_its_slot_until_the_executor_answers() {
     repeated(&mut stage, Cancellation::AlreadyCancelling, |s| {
         s.cancel(running)
     });
-    refused(&mut stage, Refusal::NotTerminal, |s| s.reap(running));
+    refuses(&mut stage, Refusal::NotTerminal, |s| s.reap(running));
     assert_eq!(stage.cancel(queued), Ok(Cancellation::Cancelled));
     assert_eq!(stage.join(&[running]), Ok(Join::Pending));
     assert_eq!(stage.join(&[queued]), Ok(Join::Cancelled));
 
     assert_eq!(stage.begin_drain(), DrainBegin::Begun);
-    let before = stage.clone();
-    assert_eq!(stage.begin_drain(), DrainBegin::AlreadyDraining);
-    assert_eq!(stage, before);
+    assert_eq!(
+        testing::unchanged(&mut stage, Stage::begin_drain),
+        DrainBegin::AlreadyDraining
+    );
     assert!(stage.is_draining() && !stage.is_drained());
-    refused(&mut stage, Refusal::Draining, |s| s.submit(0, 3));
+    refuses(&mut stage, Refusal::Draining, |s| s.submit(0, 3));
 
     assert_eq!(stage.confirm_cancel(running), Ok(Confirmation::Confirmed));
     assert_eq!(stage.reap(running), Ok(reaped(1, Terminal::Cancelled)));
@@ -71,7 +72,7 @@ fn a_cancelled_job_honours_repeats_and_cannot_complete() {
         repeated(&mut stage, Confirmation::AlreadyCancelled, |s| {
             s.confirm_cancel(id)
         });
-        refused(&mut stage, Refusal::Concluded, |s| s.complete(id));
+        refuses(&mut stage, Refusal::Concluded, |s| s.complete(id));
     }
 }
 
@@ -84,8 +85,8 @@ fn a_complete_job_honours_the_repeat_and_cannot_be_cancelled() {
     assert_eq!(stage.cancel(id), Ok(Cancellation::Cancelling));
     assert_eq!(stage.complete(id), Ok(Completion::Completed));
     repeated(&mut stage, Completion::AlreadyComplete, |s| s.complete(id));
-    refused(&mut stage, Refusal::Concluded, |s| s.cancel(id));
-    refused(&mut stage, Refusal::Concluded, |s| s.confirm_cancel(id));
+    refuses(&mut stage, Refusal::Concluded, |s| s.cancel(id));
+    refuses(&mut stage, Refusal::Concluded, |s| s.confirm_cancel(id));
     assert_eq!(stage.reap(id), Ok(reaped(1, Terminal::Complete)));
 }
 

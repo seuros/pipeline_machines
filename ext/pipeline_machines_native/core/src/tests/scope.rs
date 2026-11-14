@@ -34,10 +34,10 @@ fn an_id_of_another_scope_or_never_issued_is_stale() {
     let ahead = JobId::from_raw(scoped(2, 2));
     let zero = JobId::from_raw(scoped(2, 0));
     for foreign in [from_a, ahead, zero, JobId::default()] {
-        refused(&mut b, Refusal::Stale, |s| s.cancel(foreign));
-        refused(&mut b, Refusal::Stale, |s| s.complete(foreign));
-        refused(&mut b, Refusal::Stale, |s| s.confirm_cancel(foreign));
-        refused(&mut b, Refusal::Stale, |s| s.reap(foreign));
+        refuses(&mut b, Refusal::Stale, |s| s.cancel(foreign));
+        refuses(&mut b, Refusal::Stale, |s| s.complete(foreign));
+        refuses(&mut b, Refusal::Stale, |s| s.confirm_cancel(foreign));
+        refuses(&mut b, Refusal::Stale, |s| s.reap(foreign));
         assert_eq!(b.join(&[from_b, foreign]), Err(Refusal::Stale));
         assert_eq!(b.state(foreign), None);
     }
@@ -64,10 +64,10 @@ fn a_resumed_stage_continues_the_sequence_and_refuses_earlier_ids() {
         (resumed.scope(), resumed.issued(), resumed.len()),
         (3, 1, 0)
     );
-    refused(&mut resumed, Refusal::Stale, |s| s.cancel(before));
+    refuses(&mut resumed, Refusal::Stale, |s| s.cancel(before));
     let after = resumed.submit(0, 1).expect("job");
     assert_eq!(after.raw(), scoped(3, 2));
-    refused(&mut resumed, Refusal::Stale, |s| s.cancel(before));
+    refuses(&mut resumed, Refusal::Stale, |s| s.cancel(before));
 
     assert!(Stage::<u64, 2, 2>::resumed([ONE; 2], 3, SEQUENCE_MAX).is_some());
     assert!(Stage::<u64, 2, 2>::resumed([ONE; 2], 3, SEQUENCE_MAX + 1).is_none());
@@ -78,14 +78,14 @@ fn a_fan_out_needs_an_id_for_every_lane_or_takes_none() {
     let mut stage = Stage::<u64, 2, 4>::resumed([ONE; 2], 4, SEQUENCE_MAX - 1).expect("stage");
     let mut out = [JobId::default(); 2];
     // One id left, two lanes: nothing is admitted and the id is not spent.
-    refused(&mut stage, Refusal::Exhausted, |s| {
+    refuses(&mut stage, Refusal::Exhausted, |s| {
         s.fan_out(&[0, 1], 1, &mut out)
     });
     assert_eq!(out, [JobId::default(); 2]);
     assert_eq!(stage.fan_out(&[1], 1, &mut out), Ok(1));
     assert_eq!(out[0].raw(), scoped(4, SEQUENCE_MAX));
-    refused(&mut stage, Refusal::Exhausted, |s| s.submit(0, 1));
-    refused(&mut stage, Refusal::Exhausted, |s| {
+    refuses(&mut stage, Refusal::Exhausted, |s| s.submit(0, 1));
+    refuses(&mut stage, Refusal::Exhausted, |s| {
         s.fan_out(&[0], 1, &mut out)
     });
     // A spent scope still resolves what it holds.

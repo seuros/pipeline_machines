@@ -29,10 +29,11 @@ pub const fn state(state: State) -> &'static str {
     }
 }
 
-pub const fn terminal(terminal: Terminal) -> &'static str {
-    match terminal {
-        Terminal::Complete => "complete",
-        Terminal::Cancelled => "cancelled",
+matryona_machines::symbols! {
+    /// How a reaped job ended, read back from `Reaped.new`.
+    pub Terminals for Terminal as "terminal" {
+        Complete => "complete",
+        Cancelled => "cancelled",
     }
 }
 

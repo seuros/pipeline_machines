@@ -40,6 +40,9 @@ module PipelineMachines
                 | (payload: Integer, terminal: terminal) -> Reaped
   end
 
+  # Every Array argument is exactly an Array: a subclass is TypeError. A
+  # mutating method on a frozen stage raises FrozenError before it reads its
+  # arguments.
   class Stage
     LANES: Integer
     CAPACITY: Integer

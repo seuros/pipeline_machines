@@ -4,6 +4,7 @@ mod model;
 mod scope;
 
 use super::*;
+use matryona_machines::testing::{self, refuses};
 
 const ONE: NonZeroU32 = NonZeroU32::MIN;
 
@@ -22,18 +23,7 @@ fn unchanged<const N: usize, const C: usize, R: core::fmt::Debug + PartialEq>(
     expected: &Result<R, Refusal>,
     call: impl FnOnce(&mut Stage<u64, N, C>) -> Result<R, Refusal>,
 ) {
-    let before = stage.clone();
-    assert_eq!(call(stage), *expected);
-    assert_eq!(*stage, before, "{expected:?} changed the stage");
-}
-
-/// A call that must refuse with `refusal` and leave the stage as it was.
-fn refused<const N: usize, const C: usize, R: core::fmt::Debug + PartialEq>(
-    stage: &mut Stage<u64, N, C>,
-    refusal: Refusal,
-    call: impl FnOnce(&mut Stage<u64, N, C>) -> Result<R, Refusal>,
-) {
-    unchanged(stage, &Err(refusal), call);
+    assert_eq!(testing::unchanged(stage, call), *expected);
 }
 
 /// A call that must be honoured as the repeat `answer`, changing nothing.
@@ -62,9 +52,9 @@ fn capacity_includes_running_and_unreaped_terminal_jobs() {
     assert_eq!(stage.state(first), Some(State::Queued));
     assert_eq!(stage.dispatch(&[false]), None);
     assert_eq!(dispatched(&mut stage).id(), first);
-    refused(&mut stage, Refusal::Full, |s| s.submit(0, 8));
+    refuses(&mut stage, Refusal::Full, |s| s.submit(0, 8));
     assert_eq!(stage.complete(first), Ok(Completion::Completed));
-    refused(&mut stage, Refusal::Full, |s| s.submit(0, 8));
+    refuses(&mut stage, Refusal::Full, |s| s.submit(0, 8));
     assert_eq!(stage.len(), 1);
     assert_eq!(stage.reap(first), Ok(reaped(7, Terminal::Complete)));
     assert!(stage.is_empty());
@@ -72,10 +62,10 @@ fn capacity_includes_running_and_unreaped_terminal_jobs() {
     assert_ne!(first, next);
     // The slot is held again, under another id; a reaped id is stale for
     // every call, the repeated reap included: the stage keeps no history.
-    refused(&mut stage, Refusal::Stale, |s| s.reap(first));
-    refused(&mut stage, Refusal::Stale, |s| s.complete(first));
-    refused(&mut stage, Refusal::Stale, |s| s.cancel(first));
-    refused(&mut stage, Refusal::Stale, |s| s.confirm_cancel(first));
+    refuses(&mut stage, Refusal::Stale, |s| s.reap(first));
+    refuses(&mut stage, Refusal::Stale, |s| s.complete(first));
+    refuses(&mut stage, Refusal::Stale, |s| s.cancel(first));
+    refuses(&mut stage, Refusal::Stale, |s| s.confirm_cancel(first));
     assert_eq!(stage.state(first), None);
 }
 
@@ -86,13 +76,13 @@ fn submit_refusals_in_order() {
     assert!(Stage::<u8, 0, 1>::with_scope([], 1).is_none());
     assert!(Stage::<u8, 1, 0>::resumed([ONE], 1, 0).is_none());
     let mut stage = stage::<2, 1>();
-    refused(&mut stage, Refusal::UnknownLane, |s| s.submit(2, 1));
+    refuses(&mut stage, Refusal::UnknownLane, |s| s.submit(2, 1));
     stage.submit(1, 1).expect("job");
-    refused(&mut stage, Refusal::Full, |s| s.submit(0, 1));
-    refused(&mut stage, Refusal::UnknownLane, |s| s.submit(2, 1));
+    refuses(&mut stage, Refusal::Full, |s| s.submit(0, 1));
+    refuses(&mut stage, Refusal::UnknownLane, |s| s.submit(2, 1));
     assert_eq!(stage.begin_drain(), DrainBegin::Begun);
-    refused(&mut stage, Refusal::Draining, |s| s.submit(2, 1));
-    refused(&mut stage, Refusal::Draining, |s| s.submit(0, 1));
+    refuses(&mut stage, Refusal::Draining, |s| s.submit(2, 1));
+    refuses(&mut stage, Refusal::Draining, |s| s.submit(0, 1));
 }
 
 #[test]
@@ -100,20 +90,20 @@ fn fan_out_is_all_lanes_or_none() {
     const HOLE: JobId = JobId::from_raw(u64::MAX);
     let mut stage = stage::<3, 3>();
     let mut out = [HOLE; 4];
-    refused(&mut stage, Refusal::RepeatedLane, |s| {
+    refuses(&mut stage, Refusal::RepeatedLane, |s| {
         s.fan_out(&[0, 0], 7, &mut out)
     });
-    refused(&mut stage, Refusal::UnknownLane, |s| {
+    refuses(&mut stage, Refusal::UnknownLane, |s| {
         s.fan_out(&[0, 3], 7, &mut out)
     });
     // The first offending lane decides.
-    refused(&mut stage, Refusal::UnknownLane, |s| {
+    refuses(&mut stage, Refusal::UnknownLane, |s| {
         s.fan_out(&[3, 0, 0], 7, &mut out)
     });
-    refused(&mut stage, Refusal::RepeatedLane, |s| {
+    refuses(&mut stage, Refusal::RepeatedLane, |s| {
         s.fan_out(&[0, 0, 3], 7, &mut out)
     });
-    refused(&mut stage, Refusal::Undersized, |s| {
+    refuses(&mut stage, Refusal::Undersized, |s| {
         s.fan_out(&[0, 1], 7, &mut out[..1])
     });
     assert_eq!(stage.fan_out(&[], 7, &mut out), Ok(0));
@@ -121,7 +111,7 @@ fn fan_out_is_all_lanes_or_none() {
 
     let held = stage.submit(2, 1).expect("job");
     // Three lanes, two free slots: no lane is admitted.
-    refused(&mut stage, Refusal::Full, |s| {
+    refuses(&mut stage, Refusal::Full, |s| {
         s.fan_out(&[0, 1, 2], 7, &mut out)
     });
     assert_eq!(out, [HOLE; 4]);
@@ -138,10 +128,10 @@ fn fan_out_is_all_lanes_or_none() {
     assert_eq!(dispatched(&mut stage).id(), held);
 
     assert_eq!(stage.begin_drain(), DrainBegin::Begun);
-    refused(&mut stage, Refusal::Draining, |s| {
+    refuses(&mut stage, Refusal::Draining, |s| {
         s.fan_out(&[], 7, &mut out)
     });
-    refused(&mut stage, Refusal::Draining, |s| {
+    refuses(&mut stage, Refusal::Draining, |s| {
         s.fan_out(&[9, 9], 7, &mut [])
     });
 }
@@ -166,11 +156,9 @@ fn join_waits_for_all_and_refuses_what_it_does_not_hold() {
     assert_eq!(stage.join(&[extra, ids[0]]), Ok(Join::Cancelled));
     assert_eq!(stage.join(&[ids[0], extra]), Ok(Join::Cancelled));
     assert!(stage.reap(ids[0]).is_ok());
-    let before = stage.clone();
-    assert_eq!(stage.join(&ids), Err(Refusal::Stale));
-    assert_eq!(stage.join(&[extra, ids[0]]), Err(Refusal::Stale));
-    assert_eq!(stage.join(&[JobId::default()]), Err(Refusal::Stale));
-    assert_eq!(stage, before);
+    refuses(&mut stage, Refusal::Stale, |s| s.join(&ids));
+    refuses(&mut stage, Refusal::Stale, |s| s.join(&[extra, ids[0]]));
+    refuses(&mut stage, Refusal::Stale, |s| s.join(&[JobId::default()]));
 }
 
 #[test]
@@ -188,9 +176,10 @@ fn dispatch_honours_eligibility_weights_and_fifo() {
     assert_eq!(order, [a[0], a[1], b[1], a[2]]);
     assert_eq!(stage.dispatch(&[true; 2]), None);
     // A second empty round changes nothing.
-    let before = stage.clone();
-    assert_eq!(stage.dispatch(&[true; 2]), None);
-    assert_eq!(stage, before);
+    assert_eq!(
+        testing::unchanged(&mut stage, |s| s.dispatch(&[true; 2])),
+        None
+    );
 }
 
 /// Values are valid or do not exist: a hand-built `Dispatch` is held to

@@ -8,10 +8,11 @@ rust-version = "1.99"
 license = "MIT"
 [workspace.dependencies]
 pipeline-machines = { path = "ext/pipeline_machines_native/core" }
+matryona-machines = { version = ">=0.2", default-features = false }
 magnus = { version = "0.9.3", default-features = false }
 rb-sys = { version = "0.9.130", default-features = false, features = ["stable-api-compiled-fallback"] }
-priority-machines = ">=0.5"
-flow-machines = ">=0.3"
+priority-machines = ">=0.6"
+flow-machines = ">=0.4"
 periscope-machines = ">=0.4"
 [workspace.lints.rust]
 unsafe_code = "deny"

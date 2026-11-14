@@ -2,27 +2,13 @@
 
 use std::vec::Vec;
 
+use matryona_machines::testing::SplitMix64;
+
 use super::*;
 
-/// Deterministic splitmix64 stream; the tests own their draws.
-struct Rng(u64);
-
-impl Rng {
-    fn next(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
-    }
-
-    fn below(&mut self, bound: u64) -> u64 {
-        self.next() % bound
-    }
-
-    fn pick(&mut self, len: usize) -> usize {
-        usize::try_from(self.below(len as u64)).unwrap_or(0)
-    }
+/// A draw in `0..len`.
+fn pick(rng: &mut SplitMix64, len: usize) -> usize {
+    usize::try_from(rng.below(len as u64)).unwrap_or(0)
 }
 
 const LANES: usize = 3;
@@ -234,7 +220,7 @@ fn unchanged<R: Repeat>(answer: &Result<R, Refusal>) -> bool {
 }
 
 struct Run {
-    rng: Rng,
+    rng: SplitMix64,
     stage: Stage<u64, LANES, SLOTS>,
     model: Model,
     /// Every id ever issued, plus a few no stage issued.
@@ -254,7 +240,7 @@ impl Run {
         };
         let ids = Vec::from([0, model.id(start + 1), (u64::from(scope ^ 1) << 48) | 1]);
         Self {
-            rng: Rng(seed),
+            rng: SplitMix64::new(seed),
             stage: Stage::resumed(weights, scope, start).expect("stage"),
             model,
             ids,
@@ -262,22 +248,22 @@ impl Run {
     }
 
     fn id(&mut self) -> u64 {
-        self.ids[self.rng.pick(self.ids.len())]
+        self.ids[pick(&mut self.rng, self.ids.len())]
     }
 
     fn admit(&mut self) -> bool {
-        let payload = self.rng.next();
+        let payload = self.rng.next_u64();
         if self.rng.below(2) == 0 {
-            let lane = self.rng.pick(LANES + 1);
+            let lane = pick(&mut self.rng, LANES + 1);
             let expected = self.model.submit(lane, payload);
             assert_eq!(self.stage.submit(lane, payload).map(JobId::raw), expected);
             self.ids.extend(expected.iter());
             return expected.is_err();
         }
-        let lanes: Vec<usize> = (0..self.rng.pick(LANES + 1))
-            .map(|_| self.rng.pick(LANES + 1))
+        let lanes: Vec<usize> = (0..pick(&mut self.rng, LANES + 1))
+            .map(|_| pick(&mut self.rng, LANES + 1))
             .collect();
-        let room = lanes.len() + 2 - self.rng.pick(4).min(lanes.len() + 2);
+        let room = lanes.len() + 2 - pick(&mut self.rng, 4).min(lanes.len() + 2);
         let mut out = [HOLE; LANES + 3];
         let expected = self.model.fan_out(&lanes, payload, room);
         let actual = self.stage.fan_out(&lanes, payload, &mut out[..room]);
@@ -357,7 +343,7 @@ impl Run {
             let held = model.rows.iter().find(|r| r.id == *id).map(|r| r.state);
             assert_eq!(stage.state(JobId::from_raw(*id)), held);
         }
-        let some: Vec<u64> = (0..self.rng.pick(4)).map(|_| self.id()).collect();
+        let some: Vec<u64> = (0..pick(&mut self.rng, 4)).map(|_| self.id()).collect();
         let asked: Vec<JobId> = some.iter().copied().map(JobId::from_raw).collect();
         assert_eq!(self.stage.join(&asked), self.model.join(&some));
     }

@@ -139,6 +139,30 @@ class StageTest < Minitest::Test
     assert_equal :ready, s.join([])
   end
 
+  def test_array_subclasses_are_refused
+    s = stage
+    list = Class.new(Array)
+    error = assert_raises(TypeError) { PipelineMachines::Stage.new(list[1, 1, 1, 1]) }
+    assert_equal 'weights must be an Array of 4 Integers', error.message
+    assert_raises(TypeError) { PipelineMachines::Stage.with_scope(list[1, 1, 1, 1], 0) }
+    assert_raises(TypeError) { PipelineMachines::Stage.resumed(list[1, 1, 1, 1], 0, 0) }
+    error = assert_raises(TypeError) { s.fan_out(list[0], 1) }
+    assert_equal 'lanes must be an Array', error.message
+    error = assert_raises(TypeError) { s.dispatch(list[true, true, true, true]) }
+    assert_equal 'eligible must be an Array of 4 true or false', error.message
+    error = assert_raises(TypeError) { s.join(list[]) }
+    assert_equal 'ids must be an Array', error.message
+    assert_equal [0, 0], [s.size, s.issued]
+  end
+
+  def test_the_extension_alone_is_a_name_error
+    lib = File.expand_path('../lib', __dir__)
+    script = 'begin; require "pipeline_machines_native/pipeline_machines_native"; ' \
+             'rescue NameError => e; print e.class; end'
+    output = IO.popen([RbConfig.ruby, '-I', lib, '-e', script], err: %i[child out], &:read)
+    assert_equal 'NameError', output
+  end
+
   def test_freeze_all_mutations
     s = stage
     job = s.submit(0, 1)
@@ -146,6 +170,13 @@ class StageTest < Minitest::Test
     [-> { s.submit(0, 2) }, -> { s.fan_out([0], 2) }, -> { s.dispatch(ALL) },
      -> { s.cancel(job) }, -> { s.complete(job) }, -> { s.confirm_cancel(job) },
      -> { s.reap(job) }, -> { s.begin_drain }].each do |operation|
+      assert_raises(FrozenError, &operation)
+    end
+    # Frozen is checked before the arguments: a bad one still says frozen.
+    [-> { s.submit(nil, 2) }, -> { s.submit(0, -1) }, -> { s.fan_out(nil, 2) },
+     -> { s.fan_out([0], 1.0) }, -> { s.dispatch(nil) }, -> { s.dispatch([true]) },
+     -> { s.cancel(nil) }, -> { s.complete(-1) }, -> { s.confirm_cancel('1') },
+     -> { s.reap(2**64) }].each do |operation|
       assert_raises(FrozenError, &operation)
     end
     assert_equal :pending, s.join([job])
