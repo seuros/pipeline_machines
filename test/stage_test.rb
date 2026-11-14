@@ -55,6 +55,18 @@ class StageTest < Minitest::Test
     assert_raises(ArgumentError) { s.dispatch }
   end
 
+  # Each lane's eligibility is exactly true or false, never truthiness, and
+  # the refusal names the argument; nothing is dispatched.
+  def test_dispatch_eligibility_is_exactly_a_boolean
+    s = stage
+    id = s.submit(0, 10)
+    [nil, 1, 0, 'true', :true].each do |odd|
+      error = assert_raises(TypeError) { s.dispatch([odd, true, true, true]) }
+      assert_equal 'eligible must be true or false', error.message
+    end
+    assert_equal :queued, s.state(id)
+  end
+
   def test_unresolved_cancel_keeps_capacity
     s = stage
     jobs = 64.times.map { |i| s.submit(0, i) }

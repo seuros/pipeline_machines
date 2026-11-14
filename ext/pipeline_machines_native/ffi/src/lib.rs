@@ -6,16 +6,13 @@ mod names;
 use std::{cell::RefCell, num::NonZeroU32};
 
 use classes::classes;
-use magnus::{
-    Error, Ruby, Symbol, Value,
-    prelude::*,
-    typed_data::Obj,
-    value::{Qfalse, Qtrue},
-};
+use magnus::{Error, Ruby, Symbol, Value, prelude::*, typed_data::Obj};
 use matryona_machines::ruby::{
-    Symbols, exact_array, exact_array_n, integer, keep, positive, symbol,
+    Symbols, boolean, exact_array, exact_array_n, integer, keep, positive, symbol,
 };
-use names::Terminals;
+use names::{
+    Cancellations, Completions, Confirmations, DrainBegins, Joins, Refusals, States, Terminals,
+};
 use pipeline_machines::{Dispatch, JobId, Reaped, Refusal};
 
 const LANES: usize = 4;
@@ -55,16 +52,7 @@ fn eligibility(ruby: &Ruby, eligible: Value) -> Result<[bool; LANES], Error> {
     )?;
     let mut converted = [false; LANES];
     for (slot, value) in converted.iter_mut().zip(values) {
-        *slot = if Qtrue::from_value(value).is_some() {
-            true
-        } else if Qfalse::from_value(value).is_some() {
-            false
-        } else {
-            return Err(Error::new(
-                ruby.exception_type_error(),
-                "eligible must hold true or false for every lane",
-            ));
-        };
+        *slot = boolean(value, "eligible")?;
     }
     Ok(converted)
 }
@@ -84,12 +72,12 @@ fn numbers<T>(
 }
 
 fn refused(ruby: &Ruby, refusal: Refusal) -> Value {
-    symbol(ruby, names::refusal(refusal)).as_value()
+    Refusals::symbol(ruby, refusal).as_value()
 }
 
 /// An honoured unit outcome or a refusal, as the symbol it maps to.
 fn answer<T>(ruby: &Ruby, outcome: Result<T, Refusal>, name: fn(T) -> &'static str) -> Value {
-    symbol(ruby, outcome.map_or_else(names::refusal, name)).as_value()
+    symbol(ruby, outcome.map_or_else(Refusals::name, name)).as_value()
 }
 
 /// What `Dispatch.new` stores, as `Dispatch::new` for a stage of `LANES`
@@ -195,7 +183,7 @@ impl Stage {
     fn state(ruby: &Ruby, this: Obj<Self>, id: Value) -> Result<Option<Value>, Error> {
         let id = self::id(id, "id")?;
         let state = this.core.borrow().state(id);
-        Ok(state.map(|state| symbol(ruby, names::state(state)).as_value()))
+        Ok(state.map(|state| States::symbol(ruby, state).as_value()))
     }
 
     fn submit(ruby: &Ruby, this: Obj<Self>, lane: Value, payload: Value) -> Result<Value, Error> {
@@ -252,21 +240,21 @@ impl Stage {
         this.check_frozen()?;
         let id = self::id(id, "id")?;
         let outcome = this.core.borrow_mut().cancel(id);
-        Ok(answer(ruby, outcome, names::cancellation))
+        Ok(answer(ruby, outcome, Cancellations::name))
     }
 
     fn complete(ruby: &Ruby, this: Obj<Self>, id: Value) -> Result<Value, Error> {
         this.check_frozen()?;
         let id = self::id(id, "id")?;
         let outcome = this.core.borrow_mut().complete(id);
-        Ok(answer(ruby, outcome, names::completion))
+        Ok(answer(ruby, outcome, Completions::name))
     }
 
     fn confirm_cancel(ruby: &Ruby, this: Obj<Self>, id: Value) -> Result<Value, Error> {
         this.check_frozen()?;
         let id = self::id(id, "id")?;
         let outcome = this.core.borrow_mut().confirm_cancel(id);
-        Ok(answer(ruby, outcome, names::confirmation))
+        Ok(answer(ruby, outcome, Confirmations::name))
     }
 
     /// The answer is a `Reaped` built by Ruby code, so the job is reaped on
@@ -293,12 +281,12 @@ impl Stage {
     fn join(ruby: &Ruby, this: Obj<Self>, ids: Value) -> Result<Value, Error> {
         let ids = numbers(ruby, ids, "ids", id)?;
         let outcome = this.core.borrow().join(&ids);
-        Ok(answer(ruby, outcome, names::join))
+        Ok(answer(ruby, outcome, Joins::name))
     }
 
     fn begin_drain(ruby: &Ruby, this: Obj<Self>) -> Result<Value, Error> {
         this.check_frozen()?;
         let outcome = this.core.borrow_mut().begin_drain();
-        Ok(symbol(ruby, names::drain_begin(outcome)).as_value())
+        Ok(DrainBegins::symbol(ruby, outcome).as_value())
     }
 }

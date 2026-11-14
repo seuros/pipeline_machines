@@ -3,29 +3,31 @@ use pipeline_machines::{
     Cancellation, Completion, Confirmation, DrainBegin, Join, Refusal, State, Terminal,
 };
 
-pub const fn refusal(refusal: Refusal) -> &'static str {
-    match refusal {
-        Refusal::Draining => "draining",
-        Refusal::UnknownLane => "unknown_lane",
-        Refusal::RepeatedLane => "repeated_lane",
-        Refusal::Undersized => "undersized",
-        Refusal::Full => "full",
-        Refusal::Exhausted => "exhausted",
-        Refusal::Stale => "stale",
-        Refusal::NotRunning => "not_running",
-        Refusal::NotCancelling => "not_cancelling",
-        Refusal::NotTerminal => "not_terminal",
-        Refusal::Concluded => "concluded",
+matryona_machines::symbols! {
+    /// The stage's refusals.
+    pub Refusals for Refusal as "a refusal" {
+        Draining => "draining",
+        UnknownLane => "unknown_lane",
+        RepeatedLane => "repeated_lane",
+        Undersized => "undersized",
+        Full => "full",
+        Exhausted => "exhausted",
+        Stale => "stale",
+        NotRunning => "not_running",
+        NotCancelling => "not_cancelling",
+        NotTerminal => "not_terminal",
+        Concluded => "concluded",
     }
 }
 
-pub const fn state(state: State) -> &'static str {
-    match state {
-        State::Queued => "queued",
-        State::Running => "running",
-        State::Cancelling => "cancelling",
-        State::Complete => "complete",
-        State::Cancelled => "cancelled",
+matryona_machines::symbols! {
+    /// Where a job is in its lifecycle.
+    pub States for State as "a state" {
+        Queued => "queued",
+        Running => "running",
+        Cancelling => "cancelling",
+        Complete => "complete",
+        Cancelled => "cancelled",
     }
 }
 
@@ -37,40 +39,45 @@ matryona_machines::symbols! {
     }
 }
 
-pub const fn join(join: Join) -> &'static str {
-    match join {
-        Join::Ready => "ready",
-        Join::Pending => "pending",
-        Join::Cancelled => "cancelled",
+matryona_machines::symbols! {
+    /// Where a set of jobs stands as a whole.
+    pub Joins for Join as "a join" {
+        Ready => "ready",
+        Pending => "pending",
+        Cancelled => "cancelled",
     }
 }
 
-pub const fn cancellation(outcome: Cancellation) -> &'static str {
-    match outcome {
-        Cancellation::Cancelled => "cancelled",
-        Cancellation::Cancelling => "cancelling",
-        Cancellation::AlreadyCancelling => "already_cancelling",
-        Cancellation::AlreadyCancelled => "already_cancelled",
+matryona_machines::symbols! {
+    /// An honoured cancel.
+    pub Cancellations for Cancellation as "a cancellation" {
+        Cancelled => "cancelled",
+        Cancelling => "cancelling",
+        AlreadyCancelling => "already_cancelling",
+        AlreadyCancelled => "already_cancelled",
     }
 }
 
-pub const fn completion(outcome: Completion) -> &'static str {
-    match outcome {
-        Completion::Completed => "completed",
-        Completion::AlreadyComplete => "already_complete",
+matryona_machines::symbols! {
+    /// An honoured complete.
+    pub Completions for Completion as "a completion" {
+        Completed => "completed",
+        AlreadyComplete => "already_complete",
     }
 }
 
-pub const fn confirmation(outcome: Confirmation) -> &'static str {
-    match outcome {
-        Confirmation::Confirmed => "confirmed",
-        Confirmation::AlreadyCancelled => "already_cancelled",
+matryona_machines::symbols! {
+    /// An honoured cancel confirmation.
+    pub Confirmations for Confirmation as "a confirmation" {
+        Confirmed => "confirmed",
+        AlreadyCancelled => "already_cancelled",
     }
 }
 
-pub const fn drain_begin(outcome: DrainBegin) -> &'static str {
-    match outcome {
-        DrainBegin::Begun => "begun",
-        DrainBegin::AlreadyDraining => "already_draining",
+matryona_machines::symbols! {
+    /// An honoured begin_drain.
+    pub DrainBegins for DrainBegin as "a drain begin" {
+        Begun => "begun",
+        AlreadyDraining => "already_draining",
     }
 }

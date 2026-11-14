@@ -8,7 +8,7 @@ rust-version = "1.99"
 license = "MIT"
 [workspace.dependencies]
 pipeline-machines = { path = "ext/pipeline_machines_native/core" }
-matryona-machines = { version = ">=0.2", default-features = false }
+matryona-machines = { version = ">=0.3", default-features = false }
 magnus = { version = "0.9.3", default-features = false }
 rb-sys = { version = "0.9.130", default-features = false, features = ["stable-api-compiled-fallback"] }
 priority-machines = ">=0.6"
