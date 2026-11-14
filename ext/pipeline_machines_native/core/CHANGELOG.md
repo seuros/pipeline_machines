@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.4.0](https://github.com/seuros/pipeline_machines/compare/pipeline-machines-v0.3.0...pipeline-machines-v0.4.0) (2026-11-14)
+
+
+### ⚠ BREAKING CHANGES
+
+* seal Dispatch and Reaped, resolve classes at load, re-check frozen before keeping
+
+### Features
+
+* seal Dispatch and Reaped, resolve classes at load, re-check frozen before keeping ([4bed337](https://github.com/seuros/pipeline_machines/commit/4bed3379156c750d3acaff788de552977f41df3f))
+
 ## [0.3.0](https://github.com/seuros/pipeline_machines/compare/pipeline-machines-v0.2.3...pipeline-machines-v0.3.0) (2026-11-13)
 
 
