@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.5.0](https://github.com/seuros/pipeline_machines/compare/pipeline_machines/v0.4.0...pipeline_machines/v0.5.0) (2026-11-14)
+
+
+### ⚠ BREAKING CHANGES
+
+* read dispatch eligibility with matryona boolean and symbols! tables
+
+### Features
+
+* read dispatch eligibility with matryona boolean and symbols! tables ([1a0277f](https://github.com/seuros/pipeline_machines/commit/1a0277fca61387943489342d75cf581ea7623cd2))
+
 ## [0.4.0](https://github.com/seuros/pipeline_machines/compare/pipeline_machines/v0.3.0...pipeline_machines/v0.4.0) (2026-11-14)
 
 
