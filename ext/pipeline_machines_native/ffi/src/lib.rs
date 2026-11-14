@@ -1,16 +1,18 @@
 //! Native boundary: all lifecycle decisions are delegated to the stage core.
+mod classes;
 mod init;
 mod names;
 
 use std::{cell::RefCell, num::NonZeroU32};
 
+use classes::data;
 use magnus::{
-    Error, Integer, RArray, Ruby, TryConvert, Value,
+    Error, Integer, RArray, Ruby, Symbol, TryConvert, Value,
     prelude::*,
     typed_data::Obj,
     value::{Qfalse, Qtrue},
 };
-use pipeline_machines::{JobId, Refusal};
+use pipeline_machines::{Dispatch, JobId, Reaped, Refusal, Terminal};
 
 const LANES: usize = 4;
 const CAPACITY: usize = 64;
@@ -32,15 +34,21 @@ impl Number {
     }
 }
 
+/// `TypeError` unless `value` is an Integer; the range is checked by the
+/// conversion that follows (`RangeError`).
+fn integer(value: Value, expected: &'static str) -> Result<Value, Error> {
+    if Integer::from_value(value).is_none() {
+        return Err(Error::new(
+            Ruby::get_with(value).exception_type_error(),
+            expected,
+        ));
+    }
+    Ok(value)
+}
+
 impl TryConvert for Number {
     fn try_convert(value: Value) -> Result<Self, Error> {
-        if Integer::from_value(value).is_none() {
-            return Err(Error::new(
-                Ruby::get_with(value).exception_type_error(),
-                "expected an Integer (unsigned 64-bit)",
-            ));
-        }
-        u64::try_convert(value).map(Self)
+        u64::try_convert(integer(value, "expected an Integer (unsigned 64-bit)")?).map(Self)
     }
 }
 
@@ -50,13 +58,7 @@ struct Scope(u16);
 
 impl TryConvert for Scope {
     fn try_convert(value: Value) -> Result<Self, Error> {
-        if Integer::from_value(value).is_none() {
-            return Err(Error::new(
-                Ruby::get_with(value).exception_type_error(),
-                "expected an Integer scope (0..=65535)",
-            ));
-        }
-        u16::try_convert(value).map(Self)
+        u16::try_convert(integer(value, "expected an Integer scope (0..=65535)")?).map(Self)
     }
 }
 
@@ -115,8 +117,45 @@ fn answer<T>(ruby: &Ruby, outcome: Result<T, Refusal>, name: fn(T) -> &'static s
         .as_value()
 }
 
-fn data(ruby: &Ruby, name: &str) -> Result<Value, Error> {
-    ruby.define_module("PipelineMachines")?.const_get(name)
+/// What `Dispatch.new` stores, as `Dispatch::new` for a stage of `LANES`
+/// lanes accepts it: `TypeError` for a non-Integer, `RangeError` for an id no
+/// stage issues or a lane past the last.
+fn checked_dispatch(
+    ruby: &Ruby,
+    id: Number,
+    payload: Number,
+    lane: Number,
+) -> Result<(u64, u64, usize), Error> {
+    Dispatch::new::<LANES>(id.id(), payload.0, lane.lane())
+        .map(|work| (work.id().raw(), work.payload(), work.lane()))
+        .ok_or_else(|| {
+            Error::new(
+                ruby.exception_range_error(),
+                "a stage dispatches only an issued id (sequence above zero) on lanes 0...4",
+            )
+        })
+}
+
+/// What `Reaped.new` stores: `TypeError` for a non-Integer payload or a
+/// non-Symbol terminal, `RangeError` for a symbol that names no `Terminal`.
+fn checked_reaped(ruby: &Ruby, payload: Number, terminal: Value) -> Result<(u64, Symbol), Error> {
+    let symbol = Symbol::from_value(terminal)
+        .ok_or_else(|| Error::new(ruby.exception_type_error(), "terminal must be a Symbol"))?;
+    let terminal = match symbol.name()?.as_ref() {
+        "complete" => Terminal::Complete,
+        "cancelled" => Terminal::Cancelled,
+        _ => {
+            return Err(Error::new(
+                ruby.exception_range_error(),
+                "terminal must be :complete or :cancelled",
+            ));
+        }
+    };
+    let reaped = Reaped::new(payload.0, terminal);
+    Ok((
+        reaped.payload(),
+        ruby.to_symbol(names::terminal(reaped.terminal())),
+    ))
 }
 
 /// `PipelineMachines.scope_of(id)`: the scope an id was issued under.
@@ -154,6 +193,32 @@ impl Stage {
             core,
             "issued is past the last sequence of a scope (2**48 - 1)",
         )
+    }
+
+    /// Run `act` on a copy of the stage and build its answer with `build`;
+    /// the copy replaces the stage only once the answer exists. A `build`
+    /// that raises loses nothing; one that froze the stage meanwhile raises
+    /// `FrozenError`, one that changed it (a redefined constructor calling
+    /// back in) `RuntimeError`, and neither applies the copy.
+    fn commit<A>(
+        ruby: &Ruby,
+        this: Obj<Self>,
+        act: impl FnOnce(&mut Core) -> A,
+        build: impl FnOnce(A) -> Result<Value, Error>,
+    ) -> Result<Value, Error> {
+        let before = this.core.borrow().clone();
+        let mut after = before.clone();
+        let value = build(act(&mut after))?;
+        this.check_frozen()?;
+        let mut core = this.core.borrow_mut();
+        if *core != before {
+            return Err(Error::new(
+                ruby.exception_runtime_error(),
+                "the stage changed while its answer was built; the answer was not applied",
+            ));
+        }
+        *core = after;
+        Ok(value)
     }
 
     fn scope(&self) -> u16 {
@@ -226,14 +291,23 @@ impl Stage {
         })
     }
 
-    fn dispatch(ruby: &Ruby, this: Obj<Self>, eligible: RArray) -> Result<Option<Value>, Error> {
+    /// The answer is a `Dispatch` built by Ruby code, so the job is taken
+    /// on a copy and the stage moves only once that value exists.
+    fn dispatch(ruby: &Ruby, this: Obj<Self>, eligible: RArray) -> Result<Value, Error> {
         this.check_frozen()?;
         let eligible = eligibility(ruby, eligible)?;
-        // Resolve the class before taking anything, so a failure loses nothing.
-        let class = data(ruby, "Dispatch")?;
-        let work = this.core.borrow_mut().dispatch(&eligible);
-        work.map(|work| class.funcall("new", (work.id.raw(), work.payload, work.lane)))
-            .transpose()
+        let class = data(ruby, |classes| classes.dispatch)?;
+        Self::commit(
+            ruby,
+            this,
+            |core| core.dispatch(&eligible),
+            |work| {
+                work.map_or_else(
+                    || Ok(ruby.qnil().as_value()),
+                    |work| class.funcall("new", (work.id().raw(), work.payload(), work.lane())),
+                )
+            },
+        )
     }
 
     fn cancel(ruby: &Ruby, this: Obj<Self>, id: Number) -> Result<Value, Error> {
@@ -254,18 +328,23 @@ impl Stage {
         Ok(answer(ruby, outcome, names::confirmation))
     }
 
+    /// The answer is a `Reaped` built by Ruby code, so the job is reaped on
+    /// a copy and the stage moves only once that value exists.
     fn reap(ruby: &Ruby, this: Obj<Self>, id: Number) -> Result<Value, Error> {
         this.check_frozen()?;
-        // Resolve the class before taking anything, so a failure loses nothing.
-        let class = data(ruby, "Reaped")?;
-        let outcome = this.core.borrow_mut().reap(id.id());
-        match outcome {
-            Ok(reaped) => {
-                let terminal = ruby.to_symbol(names::terminal(reaped.terminal));
-                class.funcall("new", (reaped.payload, terminal))
-            }
-            Err(refusal) => Ok(refused(ruby, refusal)),
-        }
+        let class = data(ruby, |classes| classes.reaped)?;
+        Self::commit(
+            ruby,
+            this,
+            |core| core.reap(id.id()),
+            |outcome| match outcome {
+                Ok(reaped) => {
+                    let terminal = ruby.to_symbol(names::terminal(reaped.terminal()));
+                    class.funcall("new", (reaped.payload(), terminal))
+                }
+                Err(refusal) => Ok(refused(ruby, refusal)),
+            },
+        )
     }
 
     fn join(ruby: &Ruby, this: Obj<Self>, ids: RArray) -> Result<Value, Error> {

@@ -1,11 +1,14 @@
 //! Private native entry point.
-use crate::{CAPACITY, LANES, Stage, scope_of_id};
+use crate::{CAPACITY, LANES, Stage, checked_dispatch, checked_reaped, classes, scope_of_id};
 use magnus::{Error, Ruby, function, method, prelude::*};
 
 #[magnus::init]
 fn init(ruby: &Ruby) -> Result<(), Error> {
     let module = ruby.define_module("PipelineMachines")?;
+    classes::resolve(ruby, module)?;
     module.define_singleton_method("scope_of", function!(scope_of_id, 1))?;
+    module.define_singleton_method("__dispatch", function!(checked_dispatch, 3))?;
+    module.define_singleton_method("__reaped", function!(checked_reaped, 2))?;
     let class = module.define_class("Stage", ruby.class_object())?;
     class.undef_default_alloc_func();
     class.const_set("LANES", LANES)?;

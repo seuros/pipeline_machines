@@ -1,4 +1,4 @@
-use periscope_machines::scope_of;
+use periscope_machines::{scope_of, sequence_of};
 
 /// Identity of one job held by a stage, and the token that resolves it.
 ///
@@ -35,6 +35,13 @@ impl JobId {
     pub const fn scope(self) -> u16 {
         scope_of(self.0)
     }
+
+    /// Whether a stage could have issued this id: its sequence is not zero.
+    /// Sequence zero is the placeholder of every scope and is never issued.
+    #[must_use]
+    pub const fn is_issuable(self) -> bool {
+        sequence_of(self.0) != 0
+    }
 }
 
 /// Job lifecycle; cancellation is not inferred from a timeout.
@@ -65,10 +72,30 @@ pub enum Terminal {
 /// slot held and how its job ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Reaped<T> {
+    payload: T,
+    terminal: Terminal,
+}
+
+impl<T: Copy> Reaped<T> {
+    /// The value [`Stage::reap`](crate::Stage::reap) answers. Every payload
+    /// with either terminal state is one a stage can answer, so this never
+    /// refuses.
+    #[must_use]
+    pub const fn new(payload: T, terminal: Terminal) -> Self {
+        Self { payload, terminal }
+    }
+
     /// The descriptor that was submitted.
-    pub payload: T,
+    #[must_use]
+    pub const fn payload(&self) -> T {
+        self.payload
+    }
+
     /// How the job ended.
-    pub terminal: Terminal,
+    #[must_use]
+    pub const fn terminal(&self) -> Terminal {
+        self.terminal
+    }
 }
 
 /// Fan-in readiness of a set of live jobs, from [`Stage::join`](crate::Stage::join).
@@ -83,14 +110,54 @@ pub enum Join {
 }
 
 /// Descriptor returned for external execution.
+///
+/// Built only by [`Stage::dispatch`](crate::Stage::dispatch) or the validating
+/// [`Dispatch::new`], so it never holds an id no stage issues or a lane past
+/// the stage's last.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Dispatch<T> {
+    id: JobId,
+    payload: T,
+    lane: usize,
+}
+
+impl<T: Copy> Dispatch<T> {
+    /// A dispatch as a stage of `N` lanes hands one out.
+    ///
+    /// `None` for what no such stage answers: an id that is not
+    /// [issuable](JobId::is_issuable), or a `lane` that is not below `N`.
+    /// It does not prove a stage issued `id`; only the stage can.
+    #[must_use]
+    pub const fn new<const N: usize>(id: JobId, payload: T, lane: usize) -> Option<Self> {
+        if !id.is_issuable() || lane >= N {
+            return None;
+        }
+        Some(Self { id, payload, lane })
+    }
+
+    /// What [`Stage::dispatch`](crate::Stage::dispatch) hands out: an id the
+    /// stage issued and one of its lanes, so there is nothing to check.
+    pub(crate) const fn handed_out(id: JobId, payload: T, lane: usize) -> Self {
+        Self { id, payload, lane }
+    }
+
     /// Id to resolve after execution.
-    pub id: JobId,
+    #[must_use]
+    pub const fn id(&self) -> JobId {
+        self.id
+    }
+
     /// Copyable command descriptor.
-    pub payload: T,
+    #[must_use]
+    pub const fn payload(&self) -> T {
+        self.payload
+    }
+
     /// Originating lane.
-    pub lane: usize,
+    #[must_use]
+    pub const fn lane(&self) -> usize {
+        self.lane
+    }
 }
 
 /// Honoured outcome of [`Stage::cancel`](crate::Stage::cancel).

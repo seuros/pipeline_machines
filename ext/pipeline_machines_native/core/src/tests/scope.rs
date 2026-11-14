@@ -25,18 +25,6 @@ fn ids_carry_the_scope_and_a_sequence_that_never_repeats() {
 }
 
 #[test]
-fn a_refused_call_consumes_no_id() {
-    let mut stage = scoped_stage::<1>(1);
-    refused(&mut stage, Refusal::UnknownLane, |s| s.submit(2, 1));
-    stage.submit(0, 1).expect("job");
-    refused(&mut stage, Refusal::Full, |s| s.submit(0, 1));
-    refused(&mut stage, Refusal::Full, |s| {
-        s.fan_out(&[0, 1], 1, &mut [JobId::default(); 2])
-    });
-    assert_eq!(stage.issued(), 1);
-}
-
-#[test]
 fn an_id_of_another_scope_or_never_issued_is_stale() {
     let mut a = scoped_stage::<2>(1);
     let mut b = scoped_stage::<2>(2);

@@ -10,9 +10,9 @@ license = "MIT"
 pipeline-machines = { path = "ext/pipeline_machines_native/core" }
 magnus = { version = "0.9.3", default-features = false }
 rb-sys = { version = "0.9.130", default-features = false, features = ["stable-api-compiled-fallback"] }
-priority-machines = ">=0.4"
+priority-machines = ">=0.5"
 flow-machines = ">=0.3"
-periscope-machines = ">=0.3"
+periscope-machines = ">=0.4"
 [workspace.lints.rust]
 unsafe_code = "deny"
 unused_must_use = "warn"

@@ -147,25 +147,11 @@ impl<T: Copy, const N: usize, const C: usize> Stage<T, N, C> {
     /// (2^48 - 1) ids of the stage's scope have been issued. A refused
     /// submission consumes no id.
     pub fn submit(&mut self, lane: usize, payload: T) -> Result<JobId, Refusal> {
-        if self.draining {
-            return Err(Refusal::Draining);
-        }
-        if lane >= N {
-            return Err(Refusal::UnknownLane);
-        }
-        let Some(slot) = self.jobs.iter().position(Option::is_none) else {
-            return Err(Refusal::Full);
-        };
-        let mut credits = self.credits.clone();
-        credits.try_acquire(NonZeroU32::MIN).map_err(credit)?;
-        // Last check: an id is only spent on a submission that is honoured.
-        let key = match self.issuer.issue() {
-            Ok(key) => key,
-            Err(periscope_machines::Refusal::Exhausted) => return Err(Refusal::Exhausted),
-        };
-        self.credits = credits;
-        self.jobs[slot] = Some(Job::queued(key, lane, payload));
-        Ok(JobId(key))
+        // A fan-out to one lane checks the same reasons in the same order;
+        // its buffer of one is never undersized.
+        let mut out = [JobId::default()];
+        self.fan_out(&[lane], payload, &mut out)?;
+        Ok(out[0])
     }
 
     /// Submit the same descriptor to each of `lanes`, all of them or none.
@@ -217,7 +203,7 @@ impl<T: Copy, const N: usize, const C: usize> Stage<T, N, C> {
         // Everything that can still refuse runs on copies; the stage is
         // written only once nothing can.
         let mut credits = self.credits.clone();
-        credits.try_acquire(units).map_err(credit)?;
+        acquire(&mut credits, units)?;
         let mut issuer = self.issuer;
         for _ in lanes {
             match issuer.issue() {
@@ -245,30 +231,35 @@ impl<T: Copy, const N: usize, const C: usize> Stage<T, N, C> {
     /// job", returned exactly then. It still records what the round observed
     /// in the scheduler: the lane being visited forfeits its unused turns, and
     /// a second `None` in a row changes nothing. No job changes.
+    ///
+    /// The two arms where the sibling scheduler would break its contract
+    /// (selecting a lane it was not told is ready, or not knowing its own
+    /// lane) fail a debug assertion; a release build answers `None` there
+    /// with nothing changed, the conservative answer for a drain.
     pub fn dispatch(&mut self, eligible: &[bool; N]) -> Option<Dispatch<T>> {
-        let ready = core::array::from_fn(|lane| eligible[lane] && self.has_queued(lane, None));
-        let lane = self.scheduler.select(&ready)?;
-        let job = self
-            .jobs
-            .iter_mut()
-            .flatten()
-            .filter(|job| job.lane == lane && job.state == State::Queued)
-            .min_by_key(|job| job.key)?;
-        job.state = State::Running;
-        let dispatch = Dispatch {
-            id: JobId(job.key),
-            payload: job.payload,
-            lane,
+        let heads: [Option<(usize, Job<T>)>; N] = core::array::from_fn(|lane| self.head(lane));
+        let ready = core::array::from_fn(|lane| eligible[lane] && heads[lane].is_some());
+        // The round runs on a copy of the scheduler, written back once the
+        // answer is settled.
+        let mut scheduler = self.scheduler.clone();
+        let Some(lane) = scheduler.select(&ready) else {
+            self.scheduler = scheduler;
+            return None;
         };
-        if !self.has_queued(lane, None) {
-            // The lane emptied: it gives up the rest of its burst. `select`
-            // only names one of the `N` lanes, so the scheduler has nothing
-            // to refuse here; the pattern lists every answer so that a new
-            // one is a compile error.
-            let (Ok(Deactivation::Deactivated | Deactivation::Idle)
-            | Err(priority_machines::Refusal::UnknownLane)) = self.scheduler.deactivate(lane);
+        let Some((slot, job)) = heads.get(lane).copied().flatten() else {
+            debug_assert!(
+                false,
+                "the scheduler selects only a lane it was told is ready"
+            );
+            return None;
+        };
+        // The lane empties: it gives up the rest of its burst.
+        if !self.has_queued(lane, Some(job.key)) && !give_up_burst(&mut scheduler, lane) {
+            return None;
         }
-        Some(dispatch)
+        self.scheduler = scheduler;
+        self.jobs[slot] = Some(job.in_state(State::Running));
+        Some(Dispatch::handed_out(JobId(job.key), job.payload, lane))
     }
 
     /// Request cancellation. A queued job is cancelled outright; a running
@@ -284,25 +275,23 @@ impl<T: Copy, const N: usize, const C: usize> Stage<T, N, C> {
     ///
     /// [`Refusal::Stale`] for an id that names no held job, and
     /// [`Refusal::Concluded`] for a job that already completed.
-    /// [`Refusal::UnknownLane`] is the scheduler's refusal passed on; a held
-    /// job always sits in one of the `N` lanes, so it is not reachable.
     pub fn cancel(&mut self, id: JobId) -> Result<Cancellation, Refusal> {
         let (slot, job) = self.job(id)?;
         match job.state {
             State::Queued => {
-                if !self.has_queued(job.lane, Some(job.key)) {
-                    // Its lane empties: it gives up the rest of a burst it
-                    // is in the middle of. A lane not yet served this visit
-                    // answers `Idle` and keeps its place.
-                    // Asked first, so a refusal leaves the job queued.
-                    let (Deactivation::Deactivated | Deactivation::Idle) =
-                        self.scheduler.deactivate(job.lane).map_err(lane)?;
+                // Its lane empties: it gives up the rest of a burst it is in
+                // the middle of. A lane not yet served this visit answers
+                // `Idle` and keeps its place.
+                if !self.has_queued(job.lane, Some(job.key))
+                    && !give_up_burst(&mut self.scheduler, job.lane)
+                {
+                    return Err(Refusal::Stale);
                 }
-                self.set(slot, State::Cancelled);
+                self.jobs[slot] = Some(job.in_state(State::Cancelled));
                 Ok(Cancellation::Cancelled)
             }
             State::Running => {
-                self.set(slot, State::Cancelling);
+                self.jobs[slot] = Some(job.in_state(State::Cancelling));
                 Ok(Cancellation::Cancelling)
             }
             State::Cancelling => Ok(Cancellation::AlreadyCancelling),
@@ -327,7 +316,7 @@ impl<T: Copy, const N: usize, const C: usize> Stage<T, N, C> {
         let (slot, job) = self.job(id)?;
         match job.state {
             State::Running | State::Cancelling => {
-                self.set(slot, State::Complete);
+                self.jobs[slot] = Some(job.in_state(State::Complete));
                 Ok(Completion::Completed)
             }
             State::Complete => Ok(Completion::AlreadyComplete),
@@ -351,7 +340,7 @@ impl<T: Copy, const N: usize, const C: usize> Stage<T, N, C> {
         let (slot, job) = self.job(id)?;
         match job.state {
             State::Cancelling => {
-                self.set(slot, State::Cancelled);
+                self.jobs[slot] = Some(job.in_state(State::Cancelled));
                 Ok(Confirmation::Confirmed)
             }
             State::Cancelled => Ok(Confirmation::AlreadyCancelled),
@@ -378,13 +367,19 @@ impl<T: Copy, const N: usize, const C: usize> Stage<T, N, C> {
             }
         };
         let mut credits = self.credits.clone();
-        credits.release(NonZeroU32::MIN).map_err(credit)?;
+        match credits.release(NonZeroU32::MIN) {
+            Ok(()) => {}
+            Err(
+                flow_machines::Refusal::Insufficient { .. }
+                | flow_machines::Refusal::ExceedsInFlight { .. },
+            ) => {
+                debug_assert!(false, "the credit window holds one credit per held job");
+                return Err(Refusal::Stale);
+            }
+        }
         self.credits = credits;
         self.jobs[slot] = None;
-        Ok(Reaped {
-            payload: job.payload,
-            terminal,
-        })
+        Ok(Reaped::new(job.payload, terminal))
     }
 
     /// Fan-in readiness of `ids`, to be asked before reaping any of them.
@@ -445,10 +440,14 @@ impl<T: Copy, const N: usize, const C: usize> Stage<T, N, C> {
             .ok_or(Refusal::Stale)
     }
 
-    const fn set(&mut self, slot: usize, state: State) {
-        if let Some(job) = self.jobs[slot].as_mut() {
-            job.state = state;
-        }
+    /// The slot and a copy of the oldest job of `lane` waiting for dispatch.
+    fn head(&self, lane: usize) -> Option<(usize, Job<T>)> {
+        self.jobs
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, job)| job.map(|job| (slot, job)))
+            .filter(|(_, job)| job.lane == lane && job.state == State::Queued)
+            .min_by_key(|(_, job)| job.key)
     }
 
     /// Whether `lane` holds a job waiting for dispatch, other than `except`.
@@ -469,27 +468,41 @@ impl<T> Job<T> {
             state: State::Queued,
         }
     }
-}
 
-/// What a refusal of the slot-credit window means to the stage.
-///
-/// The stage keeps exactly one credit per held job, so the window agrees
-/// with the slots and both calls are checked against the slots first. The
-/// answers are mapped rather than asserted: a stage that ever disagreed with
-/// its window refuses and stays as it was.
-const fn credit(refusal: flow_machines::Refusal) -> Refusal {
-    match refusal {
-        // Fewer credits than asked for: not enough free slots.
-        flow_machines::Refusal::Insufficient { .. } => Refusal::Full,
-        // No credit out: there is no held job to release.
-        flow_machines::Refusal::ExceedsInFlight { .. } => Refusal::Stale,
+    /// The same job, moved to `state`.
+    fn in_state(self, state: State) -> Self {
+        Self { state, ..self }
     }
 }
 
-/// The scheduler's refusal, which is the stage's own under the same name.
-const fn lane(refusal: priority_machines::Refusal) -> Refusal {
-    match refusal {
-        priority_machines::Refusal::UnknownLane => Refusal::UnknownLane,
+/// End `lane`'s burst in `scheduler`; `false` only if the scheduler does not
+/// know the lane, which the stage's invariants rule out (every lane it asks
+/// about is below `N`), in which case nothing changed.
+fn give_up_burst<const N: usize>(scheduler: &mut WeightedRoundRobin<N>, lane: usize) -> bool {
+    match scheduler.deactivate(lane) {
+        Ok(Deactivation::Deactivated | Deactivation::Idle) => true,
+        Err(priority_machines::Refusal::UnknownLane) => {
+            debug_assert!(false, "the stage asks only about one of its N lanes");
+            false
+        }
+    }
+}
+
+/// Take `units` slot credits on a copy of the window.
+///
+/// The stage keeps exactly one credit per held job and counts its free slots
+/// before it asks, so the window has every credit asked for. Were that ever
+/// untrue the call is refused as full, and the caller's copy is dropped.
+fn acquire(credits: &mut CreditWindow, units: NonZeroU32) -> Result<(), Refusal> {
+    match credits.try_acquire(units) {
+        Ok(()) => Ok(()),
+        Err(
+            flow_machines::Refusal::Insufficient { .. }
+            | flow_machines::Refusal::ExceedsInFlight { .. },
+        ) => {
+            debug_assert!(false, "the credit window holds one credit per held job");
+            Err(Refusal::Full)
+        }
     }
 }
 

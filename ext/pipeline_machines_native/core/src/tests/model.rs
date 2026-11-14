@@ -188,10 +188,7 @@ impl Model {
             }
         };
         let row = self.rows.remove(at);
-        Ok(Reaped {
-            payload: row.payload,
-            terminal,
-        })
+        Ok(Reaped::new(row.payload, terminal))
     }
 
     fn join(&self, ids: &[u64]) -> Result<Join, Refusal> {
@@ -304,7 +301,10 @@ impl Run {
                 let eligible = core::array::from_fn(|_| self.rng.below(4) != 0);
                 let expected = self.model.dispatch(eligible);
                 let actual = self.stage.dispatch(&eligible);
-                assert_eq!(actual.map(|d| (d.id.raw(), d.payload, d.lane)), expected);
+                assert_eq!(
+                    actual.map(|d| (d.id().raw(), d.payload(), d.lane())),
+                    expected
+                );
                 false
             }
             7 | 8 => {

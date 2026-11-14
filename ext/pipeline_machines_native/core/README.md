@@ -39,18 +39,18 @@ assert_eq!(ids[0].scope(), 7);
 
 // Lane 1 is held back this round.
 let work = stage.dispatch(&[true, false]).expect("lane 0 has work");
-assert_eq!((work.id, work.payload, work.lane), (ids[0], 42, 0));
+assert_eq!((work.id(), work.payload(), work.lane()), (ids[0], 42, 0));
 assert_eq!(stage.dispatch(&[true, false]), None);
 
-assert_eq!(stage.complete(work.id), Ok(Completion::Completed));
-assert_eq!(stage.complete(work.id), Ok(Completion::AlreadyComplete));
-assert_eq!(stage.cancel(work.id), Err(Refusal::Concluded));
+assert_eq!(stage.complete(work.id()), Ok(Completion::Completed));
+assert_eq!(stage.complete(work.id()), Ok(Completion::AlreadyComplete));
+assert_eq!(stage.cancel(work.id()), Err(Refusal::Concluded));
 assert_eq!(stage.cancel(ids[1]), Ok(Cancellation::Cancelled));
 assert_eq!(stage.join(&ids), Ok(Join::Cancelled));
 
-let reaped = Reaped { payload: 42, terminal: Terminal::Complete };
-assert_eq!(stage.reap(work.id), Ok(reaped));
-assert_eq!(stage.reap(work.id), Err(Refusal::Stale));
+let reaped = Reaped::new(42, Terminal::Complete);
+assert_eq!(stage.reap(work.id()), Ok(reaped));
+assert_eq!(stage.reap(work.id()), Err(Refusal::Stale));
 assert_eq!(stage.join(&ids), Err(Refusal::Stale));
 ```
 
@@ -73,7 +73,7 @@ assert_eq!(stage.join(&ids), Err(Refusal::Stale));
   | `cancel` | `Cancelled`, `Cancelling`, `AlreadyCancelling`, `AlreadyCancelled` | `Stale`, `Concluded` |
   | `complete` | `Completed`, `AlreadyComplete` | `Stale`, `NotRunning`, `Concluded` |
   | `confirm_cancel` | `Confirmed`, `AlreadyCancelled` | `Stale`, `NotCancelling`, `Concluded` |
-  | `reap` | `Reaped { payload, terminal }` | `Stale`, `NotTerminal` |
+  | `reap` | `Reaped` (`payload()`, `terminal()`) | `Stale`, `NotTerminal` |
   | `join` | `Ready`, `Pending`, `Cancelled` | `Stale` |
   | `begin_drain` | `Begun`, `AlreadyDraining` | never refuses |
 
@@ -129,12 +129,34 @@ assert_eq!(stage.join(&ids), Err(Refusal::Stale));
   sequence: nothing is held, every earlier id is `Stale`, and resubmitting is
   the caller's job. It is `None` when `issued` is beyond `SEQUENCE_MAX`.
 - **Siblings.** Slot credits are a `flow_machines::CreditWindow`, lane turns
-  a `priority_machines::WeightedRoundRobin`. Their refusals are mapped onto
-  `Refusal`, every variant listed, never asserted: `Insufficient` is `Full`,
-  `ExceedsInFlight` is `Stale`, `UnknownLane` is `UnknownLane`. The stage
-  checks its own slots and lanes first, so none of them is reachable through
-  this API, and the stage never panics.
-- **Time.** There is none: the stage reads no clock and takes no instant.
+  a `priority_machines::WeightedRoundRobin`. No sibling refusal is translated
+  into a `Refusal`: the stage counts its own free slots and lanes first, so
+  every sibling call it then makes cannot be refused. The type system still
+  demands an arm for each; each is a `debug_assert!` naming the invariant and
+  a conservative answer with nothing changed:
+
+  | Sibling call | Invariant | Release-build answer |
+  | --- | --- | --- |
+  | `try_acquire` in `submit`, `fan_out` | one credit per held job, free slots counted first | `Full` |
+  | `release` in `reap` | a held job holds a credit | `Stale` |
+  | `deactivate` in `cancel` | a held job sits in one of the `N` lanes | `Stale` |
+  | `deactivate` in `dispatch` | the scheduler selects one of its own lanes | `None` |
+  | the selected lane's head in `dispatch` | the scheduler selects only a lane it was told is ready | `None` |
+
+  `dispatch` runs the round on a copy of the scheduler and moves the job only
+  once both are settled, so its fallback changes nothing either. It stays an
+  `Option` drain rather than a `Result`: a refusal there would need a variant
+  that exists only for an arm no correct build reaches. Nothing in the crate
+  panics.
+- **Values.** `Dispatch::new::<N>(id, payload, lane)` answers `None` for what
+  no stage of `N` lanes hands out: an id whose sequence is zero
+  (`JobId::is_issuable`) or a lane not below `N`. It cannot prove a stage
+  issued `id`; only the stage can. `Reaped::new(payload, terminal)` never
+  refuses: every pair is one `reap` can answer. Both keep their fields
+  private behind readers (`id()`, `payload()`, `lane()`, `terminal()`), so
+  no value bypasses its constructor.
+- **Time.** There is none: the stage reads no clock and takes no instant, so
+  no answer records one.
 
 The Ruby gem mirrors `Stage`, `Dispatch` and `Reaped` under the same names;
 job ids are Integers, unit variants are symbols, and `fan_out` returns the

@@ -275,21 +275,21 @@ A restarted stage counts from one again, so an id that outlived the restart coul
 
 ### What each call answers
 
-| Call | Honoured | Refused, nothing changed |
-| --- | --- | --- |
-| `submit(lane, payload)` | the job id (Integer) | `:draining`, `:unknown_lane`, `:full`, `:exhausted` |
-| `fan_out(lanes, payload)` | the job ids in lane order (Array), `[]` for no lanes | `:draining`, `:unknown_lane`, `:repeated_lane`, `:full`, `:exhausted` |
-| `dispatch(eligible)` | a `Dispatch`, or `nil` when no eligible lane has a queued job | never refuses |
-| `cancel(id)` | `:cancelled` (was queued), `:cancelling` (is running), `:already_cancelling`, `:already_cancelled` | `:stale`, `:concluded` |
-| `complete(id)` | `:completed`, `:already_complete` | `:stale`, `:not_running`, `:concluded` |
-| `confirm_cancel(id)` | `:confirmed`, `:already_cancelled` | `:stale`, `:not_cancelling`, `:concluded` |
-| `reap(id)` | a `Reaped` | `:stale`, `:not_terminal` |
-| `join(ids)` | `:ready`, `:pending`, `:cancelled` | `:stale` |
-| `begin_drain` | `:begun`, `:already_draining` | never refuses |
-| `state(id)` | `:queued`, `:running`, `:cancelling`, `:complete`, `:cancelled`, or `nil` for an id that names no held job | a query, never refuses |
-| `size`, `empty?`, `capacity`, `lanes`, `scope`, `issued`, `draining?`, `drained?` | the value | queries, never refuse |
+| Call | Honoured | Records the clock | Refused, nothing changed |
+| --- | --- | --- | --- |
+| `submit(lane, payload)` | the job id (Integer) | no clock | `:draining`, `:unknown_lane`, `:full`, `:exhausted` |
+| `fan_out(lanes, payload)` | the job ids in lane order (Array), `[]` for no lanes | no clock | `:draining`, `:unknown_lane`, `:repeated_lane`, `:full`, `:exhausted` |
+| `dispatch(eligible)` | a `Dispatch`, or `nil` when no eligible lane has a queued job | no clock | never refuses |
+| `cancel(id)` | `:cancelled` (was queued), `:cancelling` (is running), `:already_cancelling`, `:already_cancelled` | no clock | `:stale`, `:concluded` |
+| `complete(id)` | `:completed`, `:already_complete` | no clock | `:stale`, `:not_running`, `:concluded` |
+| `confirm_cancel(id)` | `:confirmed`, `:already_cancelled` | no clock | `:stale`, `:not_cancelling`, `:concluded` |
+| `reap(id)` | a `Reaped` | no clock | `:stale`, `:not_terminal` |
+| `join(ids)` | `:ready`, `:pending`, `:cancelled` | no clock | `:stale` |
+| `begin_drain` | `:begun`, `:already_draining` | no clock | never refuses |
+| `state(id)` | `:queued`, `:running`, `:cancelling`, `:complete`, `:cancelled`, or `nil` for an id that names no held job | no clock | a query, never refuses |
+| `size`, `empty?`, `capacity`, `lanes`, `scope`, `issued`, `draining?`, `drained?` | the value | no clock | queries, never refuse |
 
-The `:already_…` answers are repeats: what you asked for already held, and nothing changed. `:exhausted` means this stage has issued all 2**48-1 ids of its scope; none is ever reissued. Every refusal has its own symbol; there is no catch-all. The Rust core has one more, `Undersized`, for a fan-out buffer too short to hold the ids; the gem sizes that buffer itself, so you never see `:undersized`.
+The `:already_…` answers are repeats: what you asked for already held, and nothing changed. `:exhausted` means this stage has issued all 2**48-1 ids of its scope; none is ever reissued. There is no clock anywhere in the stage, so no answer records one. Every refusal has its own symbol; there is no catch-all. The Rust core has one more, `Undersized`, for a fan-out buffer too short to hold the ids; the gem sizes that buffer itself, so you never see `:undersized`.
 
 ## The Rules of the Carrier
 
@@ -302,6 +302,8 @@ The `:already_…` answers are repeats: what you asked for already held, and not
 - **Scopes.** Give each stage its own with `Stage.with_scope(weights, scope)`; the core cannot pick one. An id from another scope, or one never issued, is `:stale` before anything is looked up. Two stages in the same scope issue the same ids.
 - **Restarts.** Resume from a saved count with `Stage.resumed(weights, scope, issued)`, or give each incarnation a new scope. `resumed` restores the id sequence only; resubmitting is yours.
 - **`dispatch` can come back empty.** `nil` means no eligible lane had queued work. The scheduler still notes that the lane it was visiting had nothing, so that lane starts its next burst fresh.
+- **A `Dispatch` or `Reaped` is valid or does not exist.** Built by the stage or by you, `with` included, it is checked by the core: `Dispatch.new(0, 1, 0)` (sequence zero is never issued) and `Dispatch.new(1, 1, 4)` (no fifth lane) raise `RangeError`, as does `Reaped.new(1, :nope)`; a non-Integer field or a non-Symbol terminal raises `TypeError`. Both are sealed: `allocate` is gone and subclassing raises `TypeError` (a named `class X < Reaped` still binds its constant first; Ruby does that before `inherited` runs). The stage never reads a value back, ids are plain Integers, so a forged one cannot reach it.
+- **The binding never loses work.** Bad arguments raise before the stage is touched. `dispatch` and `reap` answer with values built by Ruby code, so they run on a copy of the stage and the stage moves only once the answer exists: if building it raised, the job is still queued (or still held) and the next call finds it. If a redefined constructor froze the stage while the answer was being built, the call raises `FrozenError`; if it changed the stage, `RuntimeError` and that change stands. Either way the call is not applied. The value classes are resolved once when the gem loads; swapping a constant later changes nothing the stage builds.
 - **Frozen means frozen.** `submit`, `fan_out`, `dispatch`, `cancel`, `complete`, `confirm_cancel`, `reap`, and `begin_drain` raise `FrozenError`. The queries and `join` still answer.
 
 ## What You Think You're Doing vs Reality

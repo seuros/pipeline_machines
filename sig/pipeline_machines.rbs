@@ -15,7 +15,11 @@ module PipelineMachines
   # to route an id to the stage that issued it.
   def self.scope_of: (Integer id) -> Integer
 
-  # Job ids are Integers, as issued by `submit` and `fan_out`.
+  # Job ids are Integers, as issued by `submit` and `fan_out`. `new` (and
+  # `with`) checks the value against the core's `Dispatch::new`: RangeError
+  # for an id whose sequence is zero, a field outside 0..2**64-1 or a lane
+  # past LANES - 1; TypeError for a non-Integer. Sealed: no `allocate`,
+  # subclassing raises TypeError.
   class Dispatch < Data
     attr_reader id: Integer
     attr_reader payload: Integer
@@ -24,6 +28,9 @@ module PipelineMachines
                 | (id: Integer, payload: Integer, lane: Integer) -> Dispatch
   end
 
+  # `new` (and `with`) raises TypeError for a non-Integer payload or a
+  # non-Symbol terminal, RangeError for a payload outside 0..2**64-1 or a
+  # terminal other than :complete and :cancelled. Sealed like Dispatch.
   class Reaped < Data
     type terminal = :complete | :cancelled
 
@@ -66,7 +73,10 @@ module PipelineMachines
     def fan_out: (Array[Integer] lanes, Integer payload)
                -> (Array[Integer] | :draining | :unknown_lane | :repeated_lane | :full | :exhausted)
     # `eligible` is an Array of exactly LANES true/false values. A Dispatch,
-    # or nil when no eligible lane has a queued job. Never refuses.
+    # or nil when no eligible lane has a queued job. Never refuses. Runs on
+    # a copy of the stage, applied once the Dispatch is built: a raise while
+    # building it leaves the job queued. FrozenError if building it froze
+    # the stage, RuntimeError if it changed the stage; nothing applied.
     def dispatch: (Array[bool] eligible) -> Dispatch?
     # Honoured: :cancelled (was queued), :cancelling (is running), or the
     # repeats :already_cancelling and :already_cancelled. Refused: :stale,
@@ -81,6 +91,7 @@ module PipelineMachines
     def confirm_cancel: (Integer id)
                       -> (:confirmed | :already_cancelled | :stale | :not_cancelling | :concluded)
     # Honoured: a Reaped. Refused: :not_terminal, and :stale (a repeat included).
+    # Like dispatch, applied only once the Reaped is built.
     def reap: (Integer id) -> (Reaped | :stale | :not_terminal)
     # Honoured: :ready, :pending or :cancelled. Refused: :stale when any id
     # names no held job.
