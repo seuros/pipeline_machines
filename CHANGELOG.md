@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/seuros/pipeline_machines/compare/pipeline_machines/v0.5.0...pipeline_machines/v0.5.1) (2026-11-14)
+
+
+### Bug Fixes
+
+* **deps:** require matryona-machines &gt;= 0.4, build the Array refusal message lazily ([018a7c5](https://github.com/seuros/pipeline_machines/commit/018a7c5fffbb0c5cdf1b30708e82257d8230ca8f))
+
 ## [0.5.0](https://github.com/seuros/pipeline_machines/compare/pipeline_machines/v0.4.0...pipeline_machines/v0.5.0) (2026-11-14)
 
 
