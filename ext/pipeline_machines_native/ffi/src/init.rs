@@ -1,6 +1,7 @@
 //! Private native entry point.
 use crate::{CAPACITY, LANES, Stage, checked_dispatch, checked_reaped, classes, scope_of_id};
 use magnus::{Error, Ruby, function, method, prelude::*};
+use matryona_machines::ruby::Class;
 
 #[magnus::init]
 fn init(ruby: &Ruby) -> Result<(), Error> {
@@ -34,5 +35,7 @@ fn init(ruby: &Ruby) -> Result<(), Error> {
     class.define_method("reap", method!(Stage::reap, 1))?;
     class.define_method("join", method!(Stage::join, 1))?;
     class.define_method("begin_drain", method!(Stage::begin_drain, 0))?;
-    Ok(())
+    // `new`, `with_scope` and `resumed` answer a Stage: its class is fixed
+    // now, so no conversion runs `Object.const_get` later.
+    Class::pin_wrapped::<Stage>(ruby, class).map(drop)
 }
