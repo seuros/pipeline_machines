@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/seuros/pipeline_machines/compare/pipeline_machines/v0.6.0...pipeline_machines/v0.6.1) (2026-11-16)
+
+
+### Bug Fixes
+
+* fix wrapped classes at load so building a value runs no Ruby ([4350d72](https://github.com/seuros/pipeline_machines/commit/4350d7247978463f92b95b4f3ffc5d67d28aaeab))
+
 ## [0.6.0](https://github.com/seuros/pipeline_machines/compare/pipeline_machines/v0.5.1...pipeline_machines/v0.6.0) (2026-11-16)
 
 
