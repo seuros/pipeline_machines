@@ -24,7 +24,7 @@ struct Row {
 }
 
 /// Independent reference: one growable list in admission order, no slots, no
-/// credit window, no issuer. Lane choice is the sibling scheduler's, which is
+/// issuer. Lane choice is the sibling scheduler's, which is
 /// not what is under test here.
 struct Model {
     rows: Vec<Row>,
@@ -50,7 +50,10 @@ impl Model {
 
     fn settle(&mut self, lane: usize) {
         if !self.queued(lane) {
-            assert!(self.turns.deactivate(lane).is_ok());
+            // The model keeps the explicit deactivate the stage now leaves to
+            // the scheduler's own selection.
+            let turns = &mut self.turns;
+            assert!(Lane::new(lane).map(|lane| turns.deactivate(lane)).is_ok());
         }
     }
 
@@ -101,8 +104,10 @@ impl Model {
     }
 
     fn dispatch(&mut self, eligible: [bool; LANES]) -> Option<(u64, u64, usize)> {
-        let ready = core::array::from_fn(|lane| eligible[lane] && self.queued(lane));
-        let lane = self.turns.select(&ready)?;
+        let ready =
+            core::array::from_fn(|lane| (eligible[lane] && self.queued(lane)).then_some(()));
+        let (lane, ()) = self.turns.select(&ready)?;
+        let lane = lane.get();
         let row = self
             .rows
             .iter_mut()

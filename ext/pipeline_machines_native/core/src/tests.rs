@@ -1,4 +1,3 @@
-#![allow(clippy::expect_used)]
 mod lifecycle;
 mod model;
 mod scope;

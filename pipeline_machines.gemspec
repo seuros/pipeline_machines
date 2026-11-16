@@ -6,8 +6,10 @@ Gem::Specification.new do |spec|
   spec.version = PipelineMachines::VERSION
   spec.authors = ['Abdelkader Boudih']
   spec.email = ['oss@seuros.com']
-  spec.summary = 'Initial native bounded stage lifecycle and fanout decisions'
-  spec.description = 'Local unstable stage policy model, not a durable pipeline runtime.'
+  spec.summary = 'Bounded job stages with fan-out, join and cancellation for Ruby'
+  spec.description = 'Weighted lanes share a fixed number of slots; jobs are dispatched in fair order, ' \
+                     'fanned out across lanes all or none, joined, cancelled and reaped by the caller. ' \
+                     'A decision core, not a durable pipeline runtime.'
   spec.homepage = 'https://github.com/seuros/pipeline_machines'
   spec.license = 'MIT'
   spec.required_ruby_version = '>= 4.0.0'

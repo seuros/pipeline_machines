@@ -11,7 +11,7 @@ use periscope_machines::{scope_of, sequence_of};
 ///
 /// `JobId::default()` is raw zero, which is never issued: a placeholder for
 /// filling an output buffer, stale everywhere.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct JobId(pub(crate) u64);
 
 impl JobId {

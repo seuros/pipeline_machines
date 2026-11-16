@@ -15,6 +15,11 @@ module PipelineMachines
   # to route an id to the stage that issued it.
   def self.scope_of: (Integer id) -> Integer
 
+  # Private native checks behind `Dispatch.new` and `Reaped.new`: the fields
+  # as the core holds them, TypeError/RangeError when it has no such value.
+  private def self.__dispatch: (Integer id, Integer payload, Integer lane) -> [Integer, Integer, Integer]
+  private def self.__reaped: (Integer payload, Reaped::terminal terminal) -> [Integer, Reaped::terminal]
+
   # Job ids are Integers, as issued by `submit` and `fan_out`. `new` (and
   # `with`) checks the value against the core's `Dispatch::new`: RangeError
   # for an id whose sequence is zero, a field outside 0..2**64-1 or a lane

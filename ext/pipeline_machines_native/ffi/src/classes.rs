@@ -1,6 +1,6 @@
 //! The gem's `Data` classes, resolved once when the extension loads.
 use magnus::{Error, RModule, Ruby};
-use matryona_machines::ruby::{Class, Registry};
+use matryona_machines::ruby::Class;
 
 /// `PipelineMachines::Dispatch` and `Reaped`, resolved once at init:
 /// swapping a constant later changes nothing the stage builds.
@@ -9,7 +9,11 @@ pub struct Classes {
     pub reaped: Class,
 }
 
-static CLASSES: Registry<Classes> = Registry::new("pipeline_machines");
+matryona_machines::registry! {
+    static CLASSES: Classes = "pipeline_machines";
+    /// The classes resolved at init.
+    pub fn classes;
+}
 
 /// Resolve and pin the `Data` classes Ruby defined before loading this.
 pub fn resolve(ruby: &Ruby, module: RModule) -> Result<(), Error> {
@@ -19,9 +23,4 @@ pub fn resolve(ruby: &Ruby, module: RModule) -> Result<(), Error> {
         reaped: class("Reaped")?,
     };
     CLASSES.set(ruby, classes).map(drop)
-}
-
-/// The classes resolved at init.
-pub fn classes(ruby: &Ruby) -> Result<&'static Classes, Error> {
-    CLASSES.get(ruby)
 }

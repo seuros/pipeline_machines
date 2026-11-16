@@ -9,14 +9,14 @@ Copyable payloads should be command IDs or small descriptors; adapters own actua
 resources and execute work. WRR selects ready lanes, FIFO within each lane.
 External eligibility masks can incorporate arbitration or deadline policy.
 
-Flow credits bound **all unreaped jobs**, including running and terminal jobs.
+Slots bound **all unreaped jobs**, including running and terminal jobs.
 Fanout admission is atomic across distinct lanes. Fan-in reports readiness over
 unreaped jobs, not an output aggregation or distributed transaction.
 
 Queued cancellation is immediate. Running cancellation becomes `Cancelling` and
 keeps its capacity until the executor confirms cancellation or reports completion.
 This never assumes an unresolved external effect has disappeared. Reap only
-terminal jobs to return credit; a reaped job's id is stale forever.
+terminal jobs to free their slot; a reaped job's id is stale forever.
 
 Draining refuses submissions while allowing dispatch and completion. No async
 runtime, multi-stage graph orchestration, automatic propagation, result payloads
@@ -62,7 +62,7 @@ assert_eq!(stage.join(&ids), Err(Refusal::Stale));
   `capacity()`, `lanes()`, `len()` and `is_empty()` read the bounds and the
   jobs held; `state(id)` reads one job.
 - **Refusals.** `Refusal` is the crate's one refusal type and a refused call
-  changes nothing: not a job, not a slot credit, not an issued id, not the
+  changes nothing: not a job, not a slot, not an issued id, not the
   scheduler, not the caller's buffer.
 
   | Call | Honoured | Refused |
@@ -88,7 +88,7 @@ assert_eq!(stage.join(&ids), Err(Refusal::Stale));
   names no held job.
 - **Fan-out is all lanes or none.** Every reason to refuse any lane is
   checked before the first job is admitted, and what can still refuse runs on
-  copies of the credit window and the issuer, so there is no partial fan-out:
+  a copy of the issuer, so there is no partial fan-out:
   a refusal leaves the stage and `out` untouched and consumes no id.
 - **Output buffer.** `fan_out(lanes, payload, out: &mut [JobId])` writes the
   first `lanes.len()` entries of `out` in lane order, leaves the rest
@@ -114,7 +114,8 @@ assert_eq!(stage.join(&ids), Err(Refusal::Stale));
   later job cannot be resolved by an old id. After
   `periscope_machines::SEQUENCE_MAX` (2^48 - 1) admissions `submit` and
   `fan_out` answer `Exhausted`. `raw` / `from_raw` carry ids across FFI or
-  queues. Ids order by admission, which is the FIFO order within a lane.
+  queues. `JobId` compares for equality only: ids carry their scope, and an
+  order between ids of different stages would mean nothing.
 - **Scopes.** Ids are only meaningful to the stage that issued them.
   `Stage::with_scope(weights, scope)` puts a caller-chosen `u16` in the top 16
   bits of every id; `new` is scope zero. `Stage::scope` and `JobId::scope`
@@ -128,26 +129,17 @@ assert_eq!(stage.join(&ids), Err(Refusal::Stale));
   scope. `resumed` takes the scope explicitly and restores only the id
   sequence: nothing is held, every earlier id is `Stale`, and resubmitting is
   the caller's job. It is `None` when `issued` is beyond `SEQUENCE_MAX`.
-- **Siblings.** Slot credits are a `flow_machines::CreditWindow`, lane turns
-  a `priority_machines::WeightedRoundRobin`. No sibling refusal is translated
-  into a `Refusal`: the stage counts its own free slots and lanes first, so
-  every sibling call it then makes cannot be refused. The type system still
-  demands an arm for each; each is a `debug_assert!` naming the invariant and
-  a conservative answer with nothing changed:
-
-  | Sibling call | Invariant | Release-build answer |
-  | --- | --- | --- |
-  | `try_acquire` in `submit`, `fan_out` | one credit per held job, free slots counted first | `Full` |
-  | `release` in `reap` | a held job holds a credit | `Stale` |
-  | `deactivate` in `cancel` | a held job sits in one of the `N` lanes | `Stale` |
-  | `deactivate` in `dispatch` | the scheduler selects one of its own lanes | `None` |
-  | the selected lane's head in `dispatch` | the scheduler selects only a lane it was told is ready | `None` |
-
-  `dispatch` runs the round on a copy of the scheduler and moves the job only
-  once both are settled, so its fallback changes nothing either. It stays an
-  `Option` drain rather than a `Result`: a refusal there would need a variant
-  that exists only for an arm no correct build reaches. Nothing in the crate
-  panics.
+- **Siblings.** Lane turns are a `priority_machines::WeightedRoundRobin`;
+  slots are counted directly (a slot is held exactly while it holds a job), so
+  there is no credit window to keep in step. Every held job keeps its lane as
+  a `priority_machines::Lane<N>`, typed once when it is admitted; the
+  scheduler's `UnknownLane` from that typing is the stage's own `UnknownLane`.
+  `dispatch` hands the scheduler each eligible lane's oldest job as a head
+  and gets back the selected lane with that job, so there is nothing to look
+  up; a head that is the last of its lane gives up the rest of the burst
+  inside the same selection. `cancel` gives up a burst with a `Lane<N>`, which
+  the scheduler cannot refuse. No call has an arm that a correct build never
+  reaches, and nothing in the crate panics.
 - **Values.** `Dispatch::new::<N>(id, payload, lane)` answers `None` for what
   no stage of `N` lanes hands out: an id whose sequence is zero
   (`JobId::is_issuable`) or a lane not below `N`. It cannot prove a stage
